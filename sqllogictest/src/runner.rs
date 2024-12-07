@@ -1415,45 +1415,15 @@ impl<D: AsyncDB, M: MakeConnection<Conn = D>> Runner<D, M> {
                         let comments = record_with_comments.comments.unwrap();
                         let mut iter = comments.iter();
 
-                        write!(outfile, "# Datafusion - {}", parse_comment(iter.next().unwrap().trim_end()))?;
+                        writeln!(outfile, "# Datafusion - {}", parse_comment(iter.next().unwrap().trim_end()))?;
                         for line in iter {
-                            write!(outfile, "# Datafusion - {}", parse_comment(line.trim_end()))?;
+                            writeln!(outfile, "# Datafusion - {}", parse_comment(line.trim_end()))?;
                         }
 
-                        // add skipIf since we had comments (which means errors)
-                        let r = match record_with_comments.record {
-                            Record::Statement { loc, conditions, connection, sql, expected, } => {
-                                let mut c = conditions;
-                                c.push(Condition::SkipIf { label: "Datafusion".to_string() });
-
-                                Record::Statement {
-                                    loc,
-                                    conditions: c,
-                                    connection,
-                                    sql,
-                                    expected
-                                }
-                            },
-                            Record::Query { loc, conditions, connection, sql, expected } => {
-                                let mut c = conditions;
-                                c.push(Condition::SkipIf { label: "Datafusion".to_string() });
-                                
-                                Record::Query {
-                                    loc,
-                                    conditions: c,
-                                    connection,
-                                    sql,
-                                    expected
-                                }
-                            }
-                            _ => record_with_comments.record,
-                        };
-
-                        writeln!(outfile, "{}", r)?;
+                        writeln!(outfile, "{}", Record::Condition(Condition::SkipIf { label: "Datafusion".to_string() }));
                     }
-                    else {
-                        writeln!(outfile, "{}", record_with_comments.record)?;
-                    }
+
+                    writeln!(outfile, "{}", record_with_comments.record)?;
                 }
             }
         }
