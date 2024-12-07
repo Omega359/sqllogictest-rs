@@ -18,7 +18,7 @@ use similar::{Change, ChangeTag, TextDiff};
 
 use crate::parser::*;
 use crate::substitution::Substitution;
-use crate::{column_type, ColumnType, Connections, MakeConnection};
+use crate::{column_type, ColumnType, Connections, DefaultColumnType, MakeConnection};
 
 /// Type-erased error type.
 type AnyError = Arc<dyn std::error::Error + Send + Sync>;
@@ -1420,7 +1420,7 @@ impl<D: AsyncDB, M: MakeConnection<Conn = D>> Runner<D, M> {
                             writeln!(outfile, "# Datafusion - {}", parse_comment(line.trim_end()))?;
                         }
 
-                        writeln!(outfile, "{}", Record::Condition(Condition::SkipIf { label: "Datafusion".to_string() }));
+                        writeln!(outfile, "{}", Record::<DefaultColumnType>::Condition(Condition::SkipIf { label: "Datafusion".to_string() }))?;
                     }
 
                     writeln!(outfile, "{}", record_with_comments.record)?;
