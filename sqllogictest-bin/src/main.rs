@@ -608,8 +608,8 @@ async fn update_test_file<T: std::io::Write, M: MakeConnection>(
     }
 
     fn override_with_outfile(
-        filename: &String,
-        outfilename: &PathBuf,
+        _filename: &String,
+        _outfilename: &PathBuf,
         outfile: &mut File,
     ) -> std::io::Result<()> {
         // check whether outfile ends with multiple newlines, which happens if
@@ -636,7 +636,7 @@ async fn update_test_file<T: std::io::Write, M: MakeConnection>(
             }
         }
 
-        fs_err::rename(outfilename, filename)?;
+        // fs_err::rename(outfilename, filename)?;
 
         Ok(())
     }
@@ -751,7 +751,7 @@ async fn update_record<M: MakeConnection>(
         default_column_validator,
     ) {
         Some(new_record) => {
-            writeln!(outfile, "{new_record}")?;
+            writeln!(outfile, "{}", new_record.record)?;
         }
         None => {
             writeln!(outfile, "{record}")?;

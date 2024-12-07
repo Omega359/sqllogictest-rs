@@ -18,7 +18,7 @@ use similar::{Change, ChangeTag, TextDiff};
 
 use crate::parser::*;
 use crate::substitution::Substitution;
-use crate::{ColumnType, Connections, MakeConnection};
+use crate::{column_type, ColumnType, Connections, MakeConnection};
 
 /// Type-erased error type.
 type AnyError = Arc<dyn std::error::Error + Send + Sync>;
@@ -1310,8 +1310,8 @@ impl<D: AsyncDB, M: MakeConnection<Conn = D>> Runner<D, M> {
         }
 
         fn override_with_outfile(
-            filename: &String,
-            outfilename: &PathBuf,
+            _filename: &String,
+            _outfilename: &PathBuf,
             outfile: &mut File,
         ) -> std::io::Result<()> {
             // check whether outfile ends with multiple newlines, which happens if
@@ -1339,7 +1339,7 @@ impl<D: AsyncDB, M: MakeConnection<Conn = D>> Runner<D, M> {
             }
 
             outfile.flush()?;
-            fs_err::rename(outfilename, filename)?;
+            // fs_err::rename(outfilename, filename)?;
 
             Ok(())
         }
@@ -1398,7 +1398,7 @@ impl<D: AsyncDB, M: MakeConnection<Conn = D>> Runner<D, M> {
                         continue;
                     }
                     let record_output = self.apply_record(record.clone()).await;
-                    let record = update_record_with_output(
+                    let record_with_comments = update_record_with_output(
                         &record,
                         &record_output,
                         col_separator,
@@ -1406,8 +1406,54 @@ impl<D: AsyncDB, M: MakeConnection<Conn = D>> Runner<D, M> {
                         normalizer,
                         column_type_validator,
                     )
-                    .unwrap_or(record);
-                    writeln!(outfile, "{record}")?;
+                    .unwrap_or(RecordWithComments {
+                        record,
+                        comments: None,
+                    });
+
+                    if record_with_comments.comments.is_some() {
+                        let comments = record_with_comments.comments.unwrap();
+                        let mut iter = comments.iter();
+
+                        write!(outfile, "# Datafusion - {}", parse_comment(iter.next().unwrap().trim_end()))?;
+                        for line in iter {
+                            write!(outfile, "# Datafusion - {}", parse_comment(line.trim_end()))?;
+                        }
+
+                        // add skipIf since we had comments (which means errors)
+                        let r = match record_with_comments.record {
+                            Record::Statement { loc, conditions, connection, sql, expected, } => {
+                                let mut c = conditions;
+                                c.push(Condition::SkipIf { label: "Datafusion".to_string() });
+
+                                Record::Statement {
+                                    loc,
+                                    conditions: c,
+                                    connection,
+                                    sql,
+                                    expected
+                                }
+                            },
+                            Record::Query { loc, conditions, connection, sql, expected } => {
+                                let mut c = conditions;
+                                c.push(Condition::SkipIf { label: "Datafusion".to_string() });
+                                
+                                Record::Query {
+                                    loc,
+                                    conditions: c,
+                                    connection,
+                                    sql,
+                                    expected
+                                }
+                            }
+                            _ => record_with_comments.record,
+                        };
+
+                        writeln!(outfile, "{}", r)?;
+                    }
+                    else {
+                        writeln!(outfile, "{}", record_with_comments.record)?;
+                    }
                 }
             }
         }
@@ -1424,6 +1470,28 @@ impl<D: AsyncDB, M: MakeConnection<Conn = D>> Runner<D, M> {
     }
 }
 
+fn parse_comment(comment: &str) -> String {
+    let mut c = comment.replace("\n",  " ");
+    if let Some((_prefix, suffix)) = c.split_once("DataFusion error: ") {
+        c = suffix.split_at_checked(130).unwrap_or((c.as_str(), "")).0.to_string();
+    };
+
+    if c.contains("Projections require unique expression ") {
+        c = "Error during planning: Projections require unique expression names".to_string();
+    }
+
+    if c.contains("\"") {
+        c = c.split_once("\"").unwrap().0.to_string();
+    }
+
+    c
+}
+
+pub struct RecordWithComments<T: column_type::ColumnType> {
+    pub record: Record<T>,
+    comments: Option<Vec<String>>,
+}
+
 /// Updates the specified [`Record`] with the [`QueryOutput`] produced
 /// by a Database, returning `Some(new_record)`.
 ///
@@ -1435,7 +1503,7 @@ pub fn update_record_with_output<T: ColumnType>(
     validator: Validator,
     normalizer: Normalizer,
     column_type_validator: ColumnTypeValidator<T>,
-) -> Option<Record<T>> {
+) -> Option<RecordWithComments<T>> {
     match (record.clone(), record_output) {
         (_, RecordOutput::Nothing) => None,
         // statement, query
@@ -1462,12 +1530,15 @@ pub fn update_record_with_output<T: ColumnType>(
                 *expected_count = rows.len() as u64;
             }
 
-            Some(Record::Statement {
-                sql,
-                loc,
-                conditions,
-                connection,
-                expected,
+            Some(RecordWithComments {
+                record: Record::Statement {
+                    sql,
+                    loc,
+                    conditions,
+                    connection,
+                    expected,
+                },
+                comments: None
             })
         }
         // query, statement
@@ -1480,12 +1551,15 @@ pub fn update_record_with_output<T: ColumnType>(
                 expected: _,
             },
             RecordOutput::Statement { error: None, count },
-        ) => Some(Record::Statement {
-            sql,
-            loc,
-            conditions,
-            connection,
-            expected: StatementExpect::Count(*count),
+        ) => Some(RecordWithComments {
+            record: Record::Statement {
+                sql,
+                loc,
+                conditions,
+                connection,
+                expected: StatementExpect::Count(*count),
+            },
+            comments: None
         }),
         // statement, statement
         (
@@ -1496,18 +1570,22 @@ pub fn update_record_with_output<T: ColumnType>(
                 sql,
                 expected,
             },
-            RecordOutput::Statement { count, error },
+            RecordOutput::Statement { count: _, error },
         ) => match (error, expected) {
             // Ok
-            (None, expected) => Some(Record::Statement {
-                sql,
-                loc,
-                conditions,
-                connection,
-                expected: match expected {
-                    StatementExpect::Count(_) => StatementExpect::Count(*count),
-                    StatementExpect::Error(_) | StatementExpect::Ok => StatementExpect::Ok,
+            (None, expected) => Some(RecordWithComments {
+                record: Record::Statement {
+                    sql,
+                    loc,
+                    conditions,
+                    connection,
+                    // expected: match expected {
+                    //     StatementExpect::Count(_) => StatementExpect::Count(*count),
+                    //     StatementExpect::Error(_) | StatementExpect::Ok => StatementExpect::Ok,
+                    // },
+                    expected,
                 },
+                comments: None
             }),
             // Error match
             (Some(e), StatementExpect::Error(expected_error))
@@ -1517,19 +1595,19 @@ pub fn update_record_with_output<T: ColumnType>(
             }
             // Error mismatch, update expected error
             (Some(e), r) => {
-                let reference = match &r {
-                    StatementExpect::Error(e) => Some(e),
-                    StatementExpect::Count(_) | StatementExpect::Ok => None,
-                };
-                Some(Record::Statement {
-                    sql,
-                    expected: StatementExpect::Error(ExpectedError::from_actual_error(
-                        reference,
-                        &e.to_string(),
-                    )),
-                    loc,
-                    conditions,
-                    connection,
+                Some(RecordWithComments {
+                    record: Record::Statement {
+                        sql,
+                        // expected: StatementExpect::Error(ExpectedError::from_actual_error(
+                        //     reference,
+                        //     &e.to_string(),
+                        // )),
+                        loc,
+                        conditions,
+                        connection,
+                        expected: r,
+                    },
+                    comments: Some(comments_from_error(&e.to_string()))
                 })
             }
         },
@@ -1552,61 +1630,70 @@ pub fn update_record_with_output<T: ColumnType>(
             }
             // Error mismatch
             (Some(e), r) => {
-                let reference = match &r {
-                    QueryExpect::Error(e) => Some(e),
-                    QueryExpect::Results { .. } => None,
-                };
-                Some(Record::Query {
-                    sql,
-                    expected: QueryExpect::Error(ExpectedError::from_actual_error(
-                        reference,
-                        &e.to_string(),
-                    )),
-                    loc,
-                    conditions,
-                    connection,
+                Some(RecordWithComments {
+                    record: Record::Query {
+                        sql,
+                        // expected: QueryExpect::Error(ExpectedError::from_actual_error(
+                        //     reference,
+                        //     &e.to_string(),
+                        // )),
+                        loc,
+                        conditions,
+                        connection,
+                        expected: r,
+                    },
+                    comments: Some(comments_from_error(&e.to_string()))
                 })
             }
             (None, expected) => {
-                let results = match &expected {
+                let mut errors: Vec<String> = vec![];
+
+                match &expected {
                     // If validation is successful, we respect the original file's expected results.
                     QueryExpect::Results {
                         results: expected_results,
-                        ..
-                    } if validator(normalizer, rows, expected_results) => expected_results.clone(),
-                    _ => rows.iter().map(|cols| cols.join(col_separator)).collect(),
-                };
-                let types = match &expected {
-                    // If validation is successful, we respect the original file's expected types.
-                    QueryExpect::Results {
                         types: expected_types,
                         ..
-                    } if column_type_validator(types, expected_types) => expected_types.clone(),
-                    _ => types.clone(),
-                };
-                Some(Record::Query {
-                    sql,
-                    loc,
-                    conditions,
-                    connection,
-                    expected: match expected {
-                        QueryExpect::Results {
-                            sort_mode, label, result_mode, ..
-                        } => QueryExpect::Results {
-                            results,
-                            types,
-                            sort_mode,
-                            result_mode,
-                            label,
-                        },
-                        QueryExpect::Error(_) => QueryExpect::Results {
-                            results,
-                            types,
-                            sort_mode: None,
-                            result_mode: None,
-                            label: None,
-                        },
+                    } => {
+                        if !validator(normalizer, rows, expected_results) {
+                            errors.extend(rows.iter().map(|cols| cols.join(col_separator)));
+                        }
+                        if !column_type_validator(types, expected_types) {
+                            errors.extend(comments_from_types(expected_types, types));
+                        }
                     },
+                    QueryExpect::Error(e) => {
+                        errors.extend(comments_from_error(&e.to_string()));
+                    }
+                };
+
+                Some(RecordWithComments {
+                    record: Record::Query {
+                        sql,
+                        loc,
+                        conditions,
+                        connection,
+                        expected,
+                        // expected: match expected {
+                        //     QueryExpect::Results {
+                        //         sort_mode, label, result_mode, ..
+                        //     } => QueryExpect::Results {
+                        //         results,
+                        //         types,
+                        //         sort_mode,
+                        //         result_mode,
+                        //         label,
+                        //     },
+                        //     QueryExpect::Error(_) => QueryExpect::Results {
+                        //         results,
+                        //         types,
+                        //         sort_mode: None,
+                        //         result_mode: None,
+                        //         label: None,
+                        //     },
+                        // },
+                    },
+                    comments: if errors.is_empty() { None } else { Some(errors) }
                 })
             }
         },
@@ -1629,17 +1716,52 @@ pub fn update_record_with_output<T: ColumnType>(
                     "system command failed while updating the record. It will be unchanged."
                 );
             }
-            Some(Record::System {
-                loc,
-                conditions,
-                command,
-                stdout: actual_stdout.clone(),
+            Some(RecordWithComments {
+                record: Record::System {
+                    loc,
+                    conditions,
+                    command,
+                    stdout: actual_stdout.clone(),
+                },
+                 comments: None
             })
         }
 
         // No update possible, return the original record
         _ => None,
     }
+}
+
+fn comments_from_types<T: ColumnType>(expected: &Vec<T>, actual: &Vec<T>) -> Vec<String> {
+    let expected = expected.iter().map(|c| c.to_char()).join("");
+    let actual = actual.iter().map(|c| c.to_char()).join("");
+
+    let (expected, actual) = TextDiff::from_chars(&expected, &actual)
+        .iter_all_changes()
+        .fold(
+            ("".to_string(), "".to_string()),
+            |(expected, actual), change| match change.tag() {
+                ChangeTag::Equal => (
+                    format!("{}{}", expected, change.value()),
+                    format!("{}{}", actual, change.value()),
+                ),
+                ChangeTag::Delete => (
+                    format!("{}[{}]", expected, change.value()),
+                    actual,
+                ),
+                ChangeTag::Insert => (
+                    expected,
+                    format!("{}[{}]", actual, change.value()),
+                ),
+            },
+        );
+
+    vec![format!("[Expected] {expected}"), format!("[Actual  ] {actual}")]
+}
+
+fn comments_from_error(actual_err: &String) -> Vec<String> {
+    let trimmed_err = actual_err.trim();
+    trimmed_err.lines().map(|s| s.to_string()).collect_vec()
 }
 
 #[cfg(test)]
@@ -2065,6 +2187,10 @@ Caused by:
                 strict_column_validator,
             );
 
+            let output = if let Some(o) = output {
+                Some(o.record)
+            } else { None };
+            
             assert_eq!(
                 &output,
                 &expected,
