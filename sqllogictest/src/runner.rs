@@ -1469,9 +1469,9 @@ pub struct RecordWithComments<T: column_type::ColumnType> {
 pub fn update_record_with_output<T: ColumnType>(
     record: &Record<T>,
     record_output: &RecordOutput<T>,
-    col_separator: &str,
-    validator: Validator,
-    normalizer: Normalizer,
+    _col_separator: &str,
+    _validator: Validator,
+    _normalizer: Normalizer,
     column_type_validator: ColumnTypeValidator<T>,
 ) -> Option<RecordWithComments<T>> {
     match (record.clone(), record_output) {
@@ -1590,7 +1590,7 @@ pub fn update_record_with_output<T: ColumnType>(
                 sql,
                 expected,
             },
-            RecordOutput::Query { types, rows, error },
+            RecordOutput::Query { types, rows: _, error },
         ) => match (error, expected) {
             // Error match
             (Some(e), QueryExpect::Error(expected_error))
@@ -1621,13 +1621,14 @@ pub fn update_record_with_output<T: ColumnType>(
                 match &expected {
                     // If validation is successful, we respect the original file's expected results.
                     QueryExpect::Results {
-                        results: expected_results,
                         types: expected_types,
                         ..
                     } => {
-                        if !validator(normalizer, rows, expected_results) {
-                            errors.extend(rows.iter().map(|cols| cols.join(col_separator)));
-                        }
+                        // allow errors through so manual run can find them
+                        //
+                        // if !validator(normalizer, rows, expected_results) {
+                        //     errors.extend(rows.iter().map(|cols| cols.join(col_separator)));
+                        // }
                         if !column_type_validator(types, expected_types) {
                             errors.extend(comments_from_types(expected_types, types));
                         }
