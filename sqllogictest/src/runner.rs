@@ -1427,6 +1427,7 @@ impl<D: AsyncDB, M: MakeConnection<Conn = D>> Runner<D, M> {
                     .unwrap_or(RecordWithComments {
                         record,
                         comments: None,
+                        should_skip: false,
                     });
 
                     if record_with_comments.comments.is_some() {
@@ -1437,7 +1438,9 @@ impl<D: AsyncDB, M: MakeConnection<Conn = D>> Runner<D, M> {
                         for line in iter {
                             writeln!(outfile, "# Datafusion - {}", parse_comment(line.trim_end()))?;
                         }
+                    }
 
+                    if record_with_comments.should_skip {
                         writeln!(outfile, "{}", Record::<DefaultColumnType>::Condition(Condition::SkipIf { label: "Datafusion".to_string() }))?;
                     }
 
@@ -1478,6 +1481,7 @@ fn parse_comment(comment: &str) -> String {
 pub struct RecordWithComments<T: column_type::ColumnType> {
     pub record: Record<T>,
     comments: Option<Vec<String>>,
+    should_skip: bool,
 }
 
 /// Updates the specified [`Record`] with the [`QueryOutput`] produced
@@ -1527,7 +1531,8 @@ pub fn update_record_with_output<T: ColumnType>(
                     connection,
                     expected,
                 },
-                comments: None
+                comments: None,
+                should_skip: false,
             })
         }
         // query, statement
@@ -1548,7 +1553,8 @@ pub fn update_record_with_output<T: ColumnType>(
                 connection,
                 expected: StatementExpect::Count(*count),
             },
-            comments: None
+            comments: None,
+            should_skip: false,
         }),
         // statement, statement
         (
@@ -1574,7 +1580,8 @@ pub fn update_record_with_output<T: ColumnType>(
                     // },
                     expected,
                 },
-                comments: None
+                comments: None,
+                should_skip: false,
             }),
             // Error match
             (Some(e), StatementExpect::Error(expected_error))
@@ -1596,7 +1603,8 @@ pub fn update_record_with_output<T: ColumnType>(
                         connection,
                         expected: r,
                     },
-                    comments: Some(comments_from_error(&e.to_string()))
+                    comments: Some(comments_from_error(&e.to_string())),
+                    should_skip: true,
                 })
             }
         },
@@ -1631,11 +1639,13 @@ pub fn update_record_with_output<T: ColumnType>(
                         connection,
                         expected: r,
                     },
-                    comments: Some(comments_from_error(&e.to_string()))
+                    comments: Some(comments_from_error(&e.to_string())),
+                    should_skip: true,
                 })
             }
             (None, expected) => {
                 let mut errors: Vec<String> = vec![];
+                let mut should_skip = false;
 
                 let results = match &expected {
                     QueryExpect::Results {
@@ -1689,6 +1699,7 @@ pub fn update_record_with_output<T: ColumnType>(
                         }
                         // else allow errors through so manual run can find them
                         else {
+                            should_skip = true;
                             expected_results.clone()
                         }
                     }
@@ -1737,6 +1748,7 @@ pub fn update_record_with_output<T: ColumnType>(
                                     types.clone()
                                 }
                                 else {
+                                    should_skip = true;
                                     expected_types.clone()
                                 }
                             }
@@ -1776,7 +1788,8 @@ pub fn update_record_with_output<T: ColumnType>(
                             },
                         },
                     },
-                    comments: if errors.is_empty() { None } else { Some(errors) }
+                    comments: if errors.is_empty() { None } else { Some(errors) },
+                    should_skip,
                 })
             }
         },
@@ -1806,7 +1819,8 @@ pub fn update_record_with_output<T: ColumnType>(
                     command,
                     stdout: actual_stdout.clone(),
                 },
-                 comments: None
+                comments: None,
+                should_skip: false,
             })
         }
 
