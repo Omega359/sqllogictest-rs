@@ -1273,8 +1273,7 @@ impl<D: AsyncDB, M: MakeConnection<Conn = D>> Runner<D, M> {
         }
     }
 
-    /// Updates a test file with the output produced by a Database. It is an utility function
-    /// wrapping [`update_test_file_with_runner`].
+    /// Updates a test file with the output produced by a Database.
     ///
     /// Specifically, it will create `"{filename}.temp"` to buffer the updated records and then
     /// override the original file with it.
@@ -1282,13 +1281,14 @@ impl<D: AsyncDB, M: MakeConnection<Conn = D>> Runner<D, M> {
     /// Some other notes:
     /// - empty lines at the end of the file are cleaned.
     /// - `halt` and `include` are correctly handled.
-    pub async fn update_test_file(
+    pub async fn update_test_file<OtherD: AsyncDB, OtherM: MakeConnection<Conn=OtherD>>(
         &mut self,
         filename: impl AsRef<Path>,
         col_separator: &str,
         validator: Validator,
         normalizer: Normalizer,
         column_type_validator: ColumnTypeValidator<D::ColumnType>,
+        mut comparison_runner: Option<Runner<OtherD, OtherM>>
     ) -> Result<(), Box<dyn std::error::Error>> {
         use std::io::{Read, Seek, SeekFrom, Write};
         use std::path::PathBuf;
@@ -1352,7 +1352,8 @@ impl<D: AsyncDB, M: MakeConnection<Conn = D>> Runner<D, M> {
         }
 
         let filename = filename.as_ref();
-        let records = parse_file(filename)?;
+        let records: Vec<Record<<D as AsyncDB>::ColumnType>> = parse_file(filename)?;
+        let comparison_records: Vec<Record<<OtherD as AsyncDB>::ColumnType>> = parse_file(filename)?;
 
         let (outfilename, outfile) = create_outfile(filename)?;
         let mut stack = vec![Item {
@@ -1362,7 +1363,10 @@ impl<D: AsyncDB, M: MakeConnection<Conn = D>> Runner<D, M> {
             halt: false,
         }];
 
-        for record in records {
+        for idx in 0..records.len() {
+            let record = records[idx].clone();
+            let comparison_record = &comparison_records[idx];
+
             let Item {
                 filename,
                 outfilename,
@@ -1398,9 +1402,23 @@ impl<D: AsyncDB, M: MakeConnection<Conn = D>> Runner<D, M> {
                         continue;
                     }
                     let record_output = self.apply_record(record.clone()).await;
+                    let comparison_record_output = if comparison_runner.is_some() {
+                        let output = Runner::<OtherD, OtherM>::apply_record(&mut comparison_runner.as_mut().unwrap(), comparison_record.clone()).await;
+                        match output {
+                            RecordOutput::Query { rows, .. } => {
+                                Some(rows)
+                            }
+                            _ => None
+                        }
+                    }
+                    else {
+                        None
+                    };
+
                     let record_with_comments = update_record_with_output(
                         &record,
                         &record_output,
+                        comparison_record_output,
                         col_separator,
                         validator,
                         normalizer,
@@ -1469,9 +1487,10 @@ pub struct RecordWithComments<T: column_type::ColumnType> {
 pub fn update_record_with_output<T: ColumnType>(
     record: &Record<T>,
     record_output: &RecordOutput<T>,
-    _col_separator: &str,
-    _validator: Validator,
-    _normalizer: Normalizer,
+    comparison_record_output: Option<Vec<Vec<String>>>,
+    col_separator: &str,
+    validator: Validator,
+    normalizer: Normalizer,
     column_type_validator: ColumnTypeValidator<T>,
 ) -> Option<RecordWithComments<T>> {
     match (record.clone(), record_output) {
@@ -1590,7 +1609,7 @@ pub fn update_record_with_output<T: ColumnType>(
                 sql,
                 expected,
             },
-            RecordOutput::Query { types, rows: _, error },
+            RecordOutput::Query { types, rows, error },
         ) => match (error, expected) {
             // Error match
             (Some(e), QueryExpect::Error(expected_error))
@@ -1618,23 +1637,106 @@ pub fn update_record_with_output<T: ColumnType>(
             (None, expected) => {
                 let mut errors: Vec<String> = vec![];
 
-                match &expected {
+                let results = match &expected {
+                    QueryExpect::Results {
+                        results: expected_results,
+                        ..
+                    }
+                    if !validator(normalizer, rows, expected_results) && comparison_record_output.is_some() => {
+                        // see if the comparison matches the actual, if so update
+                        let comparison_rows = comparison_record_output.unwrap();
+                        let mut ok = true;
+
+                        'outer: for i in 0..rows.len() {
+                            let actual = rows[i]
+                                .iter()
+                                // Editors do not preserve trailing whitespace, so expected may or may not lack it included
+                                .map(|s| s.trim_end().to_owned())
+                                .collect::<Vec<String>>();
+                            let comparison = comparison_rows[i]
+                                .iter()
+                                // Editors do not preserve trailing whitespace, so expected may or may not lack it included
+                                .map(|s| s.trim_end().to_owned())
+                                .collect::<Vec<String>>();
+
+                            for j in 0..actual.len() {
+                                let s = actual[j].clone();
+                                let c = comparison[j].clone();
+                                if s == c {
+                                    // all good
+                                }
+                                else if s.parse::<f64>().is_ok() && c.parse::<f64>().is_ok() {
+                                    // both floats, test for equality
+                                    let f1 = s.parse::<f64>().unwrap();
+                                    let f2 = c.parse::<f64>().unwrap();
+
+                                    if format!("{f1:.12}") != format!("{f2:.12}") {
+                                        errors.push(format!("{f1} did not eq {f2}"));
+                                        ok = false;
+                                        break 'outer;
+                                    }
+                                }
+                                else {
+                                    errors.push(format!("'{s}' did not eq '{c}'"));
+                                    ok = false;
+                                    break 'outer;
+                                }
+                            }
+                        }
+
+                        if ok {
+                            rows.iter().map(|cols| cols.join(col_separator)).collect()
+                        }
+                        // else allow errors through so manual run can find them
+                        else {
+                            expected_results.clone()
+                        }
+                    }
+                    _ => rows.iter().map(|cols| cols.join(col_separator)).collect(),
+                };
+
+                let new_types = match &expected {
                     // If validation is successful, we respect the original file's expected results.
                     QueryExpect::Results {
                         types: expected_types,
                         ..
                     } => {
-                        // allow errors through so manual run can find them
-                        //
-                        // if !validator(normalizer, rows, expected_results) {
-                        //     errors.extend(rows.iter().map(|cols| cols.join(col_separator)));
-                        // }
                         if !column_type_validator(types, expected_types) {
-                            errors.extend(comments_from_types(expected_types, types));
+                            // check the types, if I -R and sql contains avg or 'REAL'
+                            if types.len() != expected_types.len() {
+                                errors.extend(comments_from_types(expected_types, types));
+                                expected_types.clone()
+                            }
+                            else {
+                                for i in 0 .. types.len() {
+                                    let t = types.get(i).unwrap();
+                                    let e = expected_types.get(i).unwrap();
+
+                                    if t.to_char() == 'R' && e.to_char() == 'I' {
+                                        if sql.contains(" REAL") || sql.contains("AVG") {
+                                            // all good, change the type
+                                        }
+                                        else {
+                                            errors.extend(comments_from_types(expected_types, types));
+                                            break;
+                                        }
+                                    }
+                                    else {
+                                        errors.extend(comments_from_types(expected_types, types));
+                                        break;
+                                    }
+                                }
+
+                                expected_types.clone()
+                            }
+                        }
+                        else {
+                            expected_types.clone()
                         }
                     },
                     QueryExpect::Error(e) => {
                         errors.extend(comments_from_error(&e.to_string()));
+                        types.clone()
                     }
                 };
 
@@ -1644,25 +1746,24 @@ pub fn update_record_with_output<T: ColumnType>(
                         loc,
                         conditions,
                         connection,
-                        expected,
-                        // expected: match expected {
-                        //     QueryExpect::Results {
-                        //         sort_mode, label, result_mode, ..
-                        //     } => QueryExpect::Results {
-                        //         results,
-                        //         types,
-                        //         sort_mode,
-                        //         result_mode,
-                        //         label,
-                        //     },
-                        //     QueryExpect::Error(_) => QueryExpect::Results {
-                        //         results,
-                        //         types,
-                        //         sort_mode: None,
-                        //         result_mode: None,
-                        //         label: None,
-                        //     },
-                        // },
+                        expected: match expected {
+                            QueryExpect::Results {
+                                types: _, sort_mode, label, result_mode, results,
+                            } => QueryExpect::Results {
+                                results,
+                                types: new_types,
+                                sort_mode,
+                                result_mode,
+                                label,
+                            },
+                            QueryExpect::Error(_) => QueryExpect::Results {
+                                results,
+                                types: new_types,
+                                sort_mode: None,
+                                result_mode: None,
+                                label: None,
+                            },
+                        },
                     },
                     comments: if errors.is_empty() { None } else { Some(errors) }
                 })
@@ -2152,6 +2253,7 @@ Caused by:
             let output = update_record_with_output(
                 &input,
                 &record_output,
+                None,
                 " ",
                 default_validator,
                 default_normalizer,

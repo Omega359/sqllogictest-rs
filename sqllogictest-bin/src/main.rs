@@ -745,6 +745,7 @@ async fn update_record<M: MakeConnection>(
     match update_record_with_output(
         &record,
         &record_output,
+        None,
         "\t",
         default_validator,
         default_normalizer,
