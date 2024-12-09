@@ -1644,7 +1644,7 @@ pub fn update_record_with_output<T: ColumnType>(
                 })
             }
             (None, expected) => {
-                let mut errors: Vec<String> = vec![];
+                let mut comments: Vec<String> = vec![];
                 let mut should_skip = false;
 
                 let results = match &expected {
@@ -1681,13 +1681,13 @@ pub fn update_record_with_output<T: ColumnType>(
                                     let f2 = c.parse::<f64>().unwrap();
 
                                     if format!("{f1:.12}") != format!("{f2:.12}") {
-                                        errors.push(format!("{f1} did not eq {f2}"));
+                                        comments.push(format!("{f1} did not eq {f2}"));
                                         ok = false;
                                         break 'outer;
                                     }
                                 }
                                 else {
-                                    errors.push(format!("'{s}' did not eq '{c}'"));
+                                    comments.push(format!("'{s}' did not eq '{c}'"));
                                     ok = false;
                                     break 'outer;
                                 }
@@ -1695,6 +1695,13 @@ pub fn update_record_with_output<T: ColumnType>(
                         }
 
                         if ok {
+                            // since we're updating the data add note to that effect
+                            comments.push("Data was automatically updated based on compare with postgres results".to_string());
+                            comments.push("Previous results:".to_string());
+                            for r in expected_results.iter() {
+                                comments.push(format!("{r}"));
+                            }
+
                             rows.iter().map(|cols| cols.join(col_separator)).collect()
                         }
                         // else allow errors through so manual run can find them
@@ -1714,7 +1721,7 @@ pub fn update_record_with_output<T: ColumnType>(
                     } => {
                         if !column_type_validator(types, expected_types) {
                             if types.len() != expected_types.len() {
-                                errors.extend(comments_from_types("", expected_types, types));
+                                comments.extend(comments_from_types("", expected_types, types));
                                 expected_types.clone()
                             }
                             else {
@@ -1731,20 +1738,20 @@ pub fn update_record_with_output<T: ColumnType>(
                                         }
                                         else {
                                             ok = false;
-                                            errors.extend(comments_from_types("", expected_types, types));
+                                            comments.extend(comments_from_types("", expected_types, types));
                                             break;
                                         }
                                     }
                                     else {
                                         ok = false;
-                                        errors.extend(comments_from_types("", expected_types, types));
+                                        comments.extend(comments_from_types("", expected_types, types));
                                         break;
                                     }
                                 }
 
                                 if ok {
                                     // since we're updating the type note that
-                                    errors.extend(comments_from_types("Types were automatically converted from: ", expected_types, types));
+                                    comments.extend(comments_from_types("Types were automatically converted from: ", expected_types, types));
                                     types.clone()
                                 }
                                 else {
@@ -1758,7 +1765,7 @@ pub fn update_record_with_output<T: ColumnType>(
                         }
                     },
                     QueryExpect::Error(e) => {
-                        errors.extend(comments_from_error(&e.to_string()));
+                        comments.extend(comments_from_error(&e.to_string()));
                         types.clone()
                     }
                 };
@@ -1788,7 +1795,7 @@ pub fn update_record_with_output<T: ColumnType>(
                             },
                         },
                     },
-                    comments: if errors.is_empty() { None } else { Some(errors) },
+                    comments: if comments.is_empty() { None } else { Some(comments) },
                     should_skip,
                 })
             }
