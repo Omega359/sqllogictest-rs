@@ -1834,12 +1834,18 @@ fn comments_from_types<T: ColumnType>(prefix: &str, expected: &Vec<T>, actual: &
                 ),
                 ChangeTag::Insert => (
                     expected,
-                    format!("{prefix} {}[{}]", actual, change.value()),
+                    format!("{}[{}]", actual, change.value()),
                 ),
             },
         );
 
-    vec![format!("[Expected] {expected}"), format!("[Actual  ] {actual}")]
+    let mut comments = vec![];
+    if "" != prefix {
+        comments.push(prefix.to_string());
+    }
+    comments.push(format!("[Expected] {expected}"));
+    comments.push(format!("[Actual  ] {actual}"));
+    comments
 }
 
 fn comments_from_error(actual_err: &String) -> Vec<String> {
