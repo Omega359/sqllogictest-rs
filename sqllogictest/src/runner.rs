@@ -1702,12 +1702,14 @@ pub fn update_record_with_output<T: ColumnType>(
                         ..
                     } => {
                         if !column_type_validator(types, expected_types) {
-                            // check the types, if I -R and sql contains avg or 'REAL'
                             if types.len() != expected_types.len() {
-                                errors.extend(comments_from_types(expected_types, types));
+                                errors.extend(comments_from_types("", expected_types, types));
                                 expected_types.clone()
                             }
                             else {
+                                let mut ok = true;
+
+                                // check the types, if I / R and sql contains avg or 'REAL'
                                 for i in 0 .. types.len() {
                                     let t = types.get(i).unwrap();
                                     let e = expected_types.get(i).unwrap();
@@ -1717,17 +1719,26 @@ pub fn update_record_with_output<T: ColumnType>(
                                             // all good, change the type
                                         }
                                         else {
-                                            errors.extend(comments_from_types(expected_types, types));
+                                            ok = false;
+                                            errors.extend(comments_from_types("", expected_types, types));
                                             break;
                                         }
                                     }
                                     else {
-                                        errors.extend(comments_from_types(expected_types, types));
+                                        ok = false;
+                                        errors.extend(comments_from_types("", expected_types, types));
                                         break;
                                     }
                                 }
 
-                                expected_types.clone()
+                                if ok {
+                                    // since we're updating the type note that
+                                    errors.extend(comments_from_types("Types were automatically converted from: ", expected_types, types));
+                                    types.clone()
+                                }
+                                else {
+                                    expected_types.clone()
+                                }
                             }
                         }
                         else {
@@ -1804,7 +1815,7 @@ pub fn update_record_with_output<T: ColumnType>(
     }
 }
 
-fn comments_from_types<T: ColumnType>(expected: &Vec<T>, actual: &Vec<T>) -> Vec<String> {
+fn comments_from_types<T: ColumnType>(prefix: &str, expected: &Vec<T>, actual: &Vec<T>) -> Vec<String> {
     let expected = expected.iter().map(|c| c.to_char()).join("");
     let actual = actual.iter().map(|c| c.to_char()).join("");
 
@@ -1823,7 +1834,7 @@ fn comments_from_types<T: ColumnType>(expected: &Vec<T>, actual: &Vec<T>) -> Vec
                 ),
                 ChangeTag::Insert => (
                     expected,
-                    format!("{}[{}]", actual, change.value()),
+                    format!("{prefix} {}[{}]", actual, change.value()),
                 ),
             },
         );
