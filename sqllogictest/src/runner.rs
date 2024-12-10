@@ -1793,7 +1793,7 @@ pub fn update_record_with_output<T: ColumnType>(
                         connection,
                         expected: match expected {
                             QueryExpect::Results {
-                                types: _, sort_mode, label, result_mode, results,
+                                types: _, sort_mode, label, result_mode, results: _,
                             } => QueryExpect::Results {
                                 results: new_results,
                                 types: new_types,
