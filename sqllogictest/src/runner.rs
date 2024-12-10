@@ -1310,8 +1310,8 @@ impl<D: AsyncDB, M: MakeConnection<Conn = D>> Runner<D, M> {
         }
 
         fn override_with_outfile(
-            _filename: &String,
-            _outfilename: &PathBuf,
+            filename: &String,
+            outfilename: &PathBuf,
             outfile: &mut File,
         ) -> std::io::Result<()> {
             // check whether outfile ends with multiple newlines, which happens if
@@ -1339,7 +1339,8 @@ impl<D: AsyncDB, M: MakeConnection<Conn = D>> Runner<D, M> {
             }
 
             outfile.flush()?;
-            // fs_err::rename(outfilename, filename)?;
+            fs_err::rename(filename, format!("{}.bak", filename))?;
+            fs_err::rename(outfilename, filename)?;
 
             Ok(())
         }
