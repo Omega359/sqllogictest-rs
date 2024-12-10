@@ -467,9 +467,14 @@ pub fn default_normalizer(s: &String) -> String {
 /// # Default
 ///
 /// By default, the ([`default_validator`]) will be used compare normalized results.
-pub type Validator = fn(normalizer: Normalizer, actual: &[Vec<String>], expected: &[String]) -> bool;
+pub type Validator =
+    fn(normalizer: Normalizer, actual: &[Vec<String>], expected: &[String]) -> bool;
 
-pub fn default_validator(normalizer: Normalizer, actual: &[Vec<String>], expected: &[String]) -> bool {
+pub fn default_validator(
+    normalizer: Normalizer,
+    actual: &[Vec<String>],
+    expected: &[String],
+) -> bool {
     let expected_results = expected.iter().map(normalizer).collect_vec();
     // Default, we compare normalized results. Whitespace characters are ignored.
     let normalized_rows = actual
@@ -1032,11 +1037,11 @@ impl<D: AsyncDB, M: MakeConnection<Conn = D>> Runner<D, M> {
                         }
 
                         let actual_results = match self.result_mode {
-                            Some(ResultMode::ValueWise) =>
-                                rows.into_iter()
-                                    .flat_map(|strs| strs.into_iter())
-                                    .map(|str| vec![str.to_string()])
-                                    .collect_vec(),
+                            Some(ResultMode::ValueWise) => rows
+                                .into_iter()
+                                .flat_map(|strs| strs.into_iter())
+                                .map(|str| vec![str.to_string()])
+                                .collect_vec(),
                             // default to rowwise
                             _ => rows.clone(),
                         };
@@ -1281,14 +1286,14 @@ impl<D: AsyncDB, M: MakeConnection<Conn = D>> Runner<D, M> {
     /// Some other notes:
     /// - empty lines at the end of the file are cleaned.
     /// - `halt` and `include` are correctly handled.
-    pub async fn update_test_file<OtherD: AsyncDB, OtherM: MakeConnection<Conn=OtherD>>(
+    pub async fn update_test_file<OtherD: AsyncDB, OtherM: MakeConnection<Conn = OtherD>>(
         &mut self,
         filename: impl AsRef<Path>,
         col_separator: &str,
         validator: Validator,
         normalizer: Normalizer,
         column_type_validator: ColumnTypeValidator<D::ColumnType>,
-        mut comparison_runner: Option<Runner<OtherD, OtherM>>
+        mut comparison_runner: Option<Runner<OtherD, OtherM>>,
     ) -> Result<(), Box<dyn std::error::Error>> {
         use std::io::{Read, Seek, SeekFrom, Write};
         use std::path::PathBuf;
@@ -1354,7 +1359,8 @@ impl<D: AsyncDB, M: MakeConnection<Conn = D>> Runner<D, M> {
 
         let filename = filename.as_ref();
         let records: Vec<Record<<D as AsyncDB>::ColumnType>> = parse_file(filename)?;
-        let comparison_records: Vec<Record<<OtherD as AsyncDB>::ColumnType>> = parse_file(filename)?;
+        let comparison_records: Vec<Record<<OtherD as AsyncDB>::ColumnType>> =
+            parse_file(filename)?;
 
         let (outfilename, outfile) = create_outfile(filename)?;
         let mut stack = vec![Item {
@@ -1404,15 +1410,16 @@ impl<D: AsyncDB, M: MakeConnection<Conn = D>> Runner<D, M> {
                     }
                     let record_output = self.apply_record(record.clone()).await;
                     let comparison_record_output = if comparison_runner.is_some() {
-                        let output = Runner::<OtherD, OtherM>::apply_record(&mut comparison_runner.as_mut().unwrap(), comparison_record.clone()).await;
+                        let output = Runner::<OtherD, OtherM>::apply_record(
+                            &mut comparison_runner.as_mut().unwrap(),
+                            comparison_record.clone(),
+                        )
+                        .await;
                         match output {
-                            RecordOutput::Query { rows, .. } => {
-                                Some(rows)
-                            }
-                            _ => None
+                            RecordOutput::Query { rows, .. } => Some(rows),
+                            _ => None,
                         }
-                    }
-                    else {
+                    } else {
                         None
                     };
 
@@ -1424,7 +1431,7 @@ impl<D: AsyncDB, M: MakeConnection<Conn = D>> Runner<D, M> {
                         validator,
                         normalizer,
                         column_type_validator,
-                        self.result_mode.unwrap_or(ResultMode::RowWise)
+                        self.result_mode.unwrap_or(ResultMode::RowWise),
                     )
                     .unwrap_or(RecordWithComments {
                         record,
@@ -1436,14 +1443,24 @@ impl<D: AsyncDB, M: MakeConnection<Conn = D>> Runner<D, M> {
                         let comments = record_with_comments.comments.unwrap();
                         let mut iter = comments.iter();
 
-                        writeln!(outfile, "# Datafusion - {}", parse_comment(iter.next().unwrap().trim_end()))?;
+                        writeln!(
+                            outfile,
+                            "# Datafusion - {}",
+                            parse_comment(iter.next().unwrap().trim_end())
+                        )?;
                         for line in iter {
                             writeln!(outfile, "# Datafusion - {}", parse_comment(line.trim_end()))?;
                         }
                     }
 
                     if record_with_comments.should_skip {
-                        writeln!(outfile, "{}", Record::<DefaultColumnType>::Condition(Condition::SkipIf { label: "Datafusion".to_string() }))?;
+                        writeln!(
+                            outfile,
+                            "{}",
+                            Record::<DefaultColumnType>::Condition(Condition::SkipIf {
+                                label: "Datafusion".to_string()
+                            })
+                        )?;
                     }
 
                     writeln!(outfile, "{}", record_with_comments.record)?;
@@ -1464,9 +1481,13 @@ impl<D: AsyncDB, M: MakeConnection<Conn = D>> Runner<D, M> {
 }
 
 fn parse_comment(comment: &str) -> String {
-    let mut c = comment.replace("\n",  " ");
+    let mut c = comment.replace("\n", " ");
     if let Some((_prefix, suffix)) = c.split_once("DataFusion error: ") {
-        c = suffix.split_at_checked(130).unwrap_or((c.as_str(), "")).0.to_string();
+        c = suffix
+            .split_at_checked(130)
+            .unwrap_or((c.as_str(), ""))
+            .0
+            .to_string();
     };
 
     if c.contains("Projections require unique expression ") {
@@ -1621,197 +1642,227 @@ pub fn update_record_with_output<T: ColumnType>(
                 expected,
             },
             RecordOutput::Query { types, rows, error },
-        ) => match (error, expected) {
-            // Error match
-            (Some(e), QueryExpect::Error(expected_error))
-                if expected_error.is_match(&e.to_string()) =>
-            {
-                None
-            }
-            // Error mismatch
-            (Some(e), r) => {
-                Some(RecordWithComments {
-                    record: Record::Query {
-                        sql,
-                        // expected: QueryExpect::Error(ExpectedError::from_actual_error(
-                        //     reference,
-                        //     &e.to_string(),
-                        // )),
-                        loc,
-                        conditions,
-                        connection,
-                        expected: r,
-                    },
-                    comments: Some(comments_from_error(&e.to_string())),
-                    should_skip: true,
-                })
-            }
-            (None, expected) => {
-                let mut comments: Vec<String> = vec![];
-                let mut should_skip = false;
+        ) => {
+            match (error, expected) {
+                // Error match
+                (Some(e), QueryExpect::Error(expected_error))
+                    if expected_error.is_match(&e.to_string()) =>
+                {
+                    None
+                }
+                // Error mismatch
+                (Some(e), r) => {
+                    Some(RecordWithComments {
+                        record: Record::Query {
+                            sql,
+                            // expected: QueryExpect::Error(ExpectedError::from_actual_error(
+                            //     reference,
+                            //     &e.to_string(),
+                            // )),
+                            loc,
+                            conditions,
+                            connection,
+                            expected: r,
+                        },
+                        comments: Some(comments_from_error(&e.to_string())),
+                        should_skip: true,
+                    })
+                }
+                (None, expected) => {
+                    let mut comments: Vec<String> = vec![];
 
-                let actual_results = match result_mode {
-                    ResultMode::ValueWise =>
-                        rows.into_iter()
+                    let actual_results = match result_mode {
+                        ResultMode::ValueWise => rows
+                            .into_iter()
                             .flat_map(|strs| strs.into_iter())
                             .map(|str| vec![str.to_string()])
                             .collect_vec(),
-                    _ => rows.clone(),
-                };
+                        _ => rows.clone(),
+                    };
 
-                let new_results = match &expected {
-                    QueryExpect::Results {
-                        results: expected_results,
-                        ..
-                    } => {
-                        if !validator(normalizer, &actual_results, expected_results) && comparison_record_output.is_some() {
-                            // see if the comparison matches the actual, if so update
-                            let comparison_rows = comparison_record_output.unwrap();
-                            let mut ok = true;
+                    let new_results = match &expected {
+                        QueryExpect::Results {
+                            results: expected_results,
+                            ..
+                        } => {
+                            if !validator(normalizer, &actual_results, expected_results)
+                                && comparison_record_output.is_some()
+                            {
+                                // see if the comparison matches the actual, if so update
+                                let comparison_rows = comparison_record_output.unwrap();
+                                let mut ok = true;
 
-                            'outer: for i in 0..actual_results.len() {
-                                let actual = actual_results[i]
-                                    .iter()
-                                    .map(normalizer)
-                                    .collect::<Vec<String>>();
-                                let comparison = comparison_rows[i]
-                                    .iter()
-                                    .map(normalizer)
-                                    .collect::<Vec<String>>();
+                                if actual_results.len() != comparison_rows.len() {
+                                    comments.push(format!("Actual and comparison db had different result counts: {} vs {}", actual_results.len(), comparison_rows.len()));
+                                    ok = false;
+                                } else {
+                                    'outer: for i in 0..actual_results.len() {
+                                        let actual = actual_results[i]
+                                            .iter()
+                                            .map(normalizer)
+                                            .collect::<Vec<String>>();
+                                        let comparison = comparison_rows[i]
+                                            .iter()
+                                            .map(normalizer)
+                                            .collect::<Vec<String>>();
 
-                                for j in 0..actual.len() {
-                                    let s = actual[j].clone();
-                                    let c = comparison[j].clone();
-                                    if s == c {
-                                        // all good
-                                    } else if s.parse::<f64>().is_ok() && c.parse::<f64>().is_ok() {
-                                        // both floats, test for equality
-                                        let f1 = s.parse::<f64>().unwrap();
-                                        let f2 = c.parse::<f64>().unwrap();
-
-                                        if format!("{f1:.12}") != format!("{f2:.12}") {
-                                            comments.push(format!("{f1} did not eq {f2}"));
+                                        if actual.len() != comparison.len() {
+                                            comments.push(format!("Actual and comparison db had different result counts: {} vs {}", actual_results.len(), comparison_rows.len()));
                                             ok = false;
                                             break 'outer;
                                         }
-                                    } else {
-                                        comments.push(format!("'{s}' did not eq '{c}'"));
-                                        ok = false;
-                                        break 'outer;
-                                    }
-                                }
-                            }
 
-                            if ok {
-                                // since we're updating the data add note to that effect
-                                comments.push("Data was automatically updated based on compare with postgres results".to_string());
-                                comments.push("Previous results:".to_string());
-                                for r in expected_results.iter() {
-                                    comments.push(format!("{r}"));
-                                }
+                                        for j in 0..actual.len() {
+                                            let s = actual[j].clone();
+                                            let c = comparison[j].clone();
+                                            if s == c {
+                                                // all good
+                                            } else if s.parse::<f64>().is_ok()
+                                                && c.parse::<f64>().is_ok()
+                                            {
+                                                // both floats, test for equality
+                                                let f1 = s.parse::<f64>().unwrap();
+                                                let f2 = c.parse::<f64>().unwrap();
 
-                                actual_results.iter().map(|cols| cols.join(col_separator)).collect()
-                            }
-                            // else allow errors through so manual run can find them
-                            else {
-                                should_skip = true;
-                                expected_results.clone()
-                            }
-                        }
-                        else if !validator(normalizer, &actual_results, expected_results) {
-                            should_skip = true;
-                            expected_results.clone()
-                        }
-                        else {
-                            expected_results.clone()
-                        }
-                    }
-                    _ => rows.iter().map(|cols| cols.join(col_separator)).collect(),
-                };
-
-                let new_types = match &expected {
-                    // If validation is successful, we respect the original file's expected results.
-                    QueryExpect::Results {
-                        types: expected_types,
-                        ..
-                    } => {
-                        if !column_type_validator(types, expected_types) {
-                            if types.len() != expected_types.len() {
-                                comments.extend(comments_from_types("", expected_types, types));
-                                expected_types.clone()
-                            }
-                            else {
-                                let mut ok = true;
-                                let has_real_or_avg = sql.contains(" REAL") || sql.contains(" AVG");
-
-                                // check the types, if I / R and sql contains avg or 'REAL'
-                                for i in 0 .. types.len() {
-                                    let t = types.get(i).unwrap();
-                                    let e = expected_types.get(i).unwrap();
-
-                                    if t.to_char() == e.to_char() {
-                                        continue;
-                                    }
-                                    else if t.to_char() == 'R' && e.to_char() == 'I' && has_real_or_avg {
-                                        // all good, change the type
-                                    }
-                                    else {
-                                        ok = false;
-                                        break;
+                                                if format!("{f1:.12}") != format!("{f2:.12}") {
+                                                    comments.push(format!("{f1} did not eq {f2}"));
+                                                    ok = false;
+                                                    break 'outer;
+                                                }
+                                            } else {
+                                                comments.push(format!("'{s}' did not eq '{c}'"));
+                                                ok = false;
+                                                break 'outer;
+                                            }
+                                        }
                                     }
                                 }
 
                                 if ok {
-                                    // since we're updating the type note that
-                                    comments.extend(comments_from_types("Types were automatically converted from: ", expected_types, types));
-                                    types.clone()
+                                    // since we're updating the data add note to that effect
+                                    comments.push("Data was automatically updated based on comparison db results".to_string());
+                                    comments.push("Previous results:".to_string());
+                                    for r in expected_results.iter() {
+                                        comments.push(format!("{r}"));
+                                    }
+
+                                    actual_results
+                                        .iter()
+                                        .map(|cols| cols.join(col_separator))
+                                        .collect()
                                 }
+                                // else allow errors through so manual run can find them
                                 else {
-                                    comments.extend(comments_from_types("Types mismatched:", expected_types, types));
-                                    expected_types.clone()
+                                    expected_results.clone()
                                 }
+                            } else if !validator(normalizer, &actual_results, expected_results) {
+                                expected_results.clone()
+                            } else {
+                                expected_results.clone()
                             }
                         }
-                        else {
-                            expected_types.clone()
-                        }
-                    },
-                    QueryExpect::Error(e) => {
-                        comments.extend(comments_from_error(&e.to_string()));
-                        types.clone()
-                    }
-                };
+                        _ => rows.iter().map(|cols| cols.join(col_separator)).collect(),
+                    };
 
-                Some(RecordWithComments {
-                    record: Record::Query {
-                        sql,
-                        loc,
-                        conditions,
-                        connection,
-                        expected: match expected {
-                            QueryExpect::Results {
-                                types: _, sort_mode, label, result_mode, results: _,
-                            } => QueryExpect::Results {
-                                results: new_results,
-                                types: new_types,
-                                sort_mode,
-                                result_mode,
-                                label,
-                            },
-                            QueryExpect::Error(_) => QueryExpect::Results {
-                                results: new_results,
-                                types: new_types,
-                                sort_mode: None,
-                                result_mode: None,
-                                label: None,
+                    let new_types = match &expected {
+                        // If validation is successful, we respect the original file's expected results.
+                        QueryExpect::Results {
+                            types: expected_types,
+                            ..
+                        } => {
+                            if !column_type_validator(types, expected_types) {
+                                if types.len() != expected_types.len() {
+                                    comments.extend(comments_from_types("", expected_types, types));
+                                    expected_types.clone()
+                                } else {
+                                    let mut ok = true;
+                                    let has_real_or_avg =
+                                        sql.contains(" REAL") || sql.contains(" AVG");
+
+                                    // check the types, if I / R and sql contains avg or 'REAL'
+                                    for i in 0..types.len() {
+                                        let t = types.get(i).unwrap();
+                                        let e = expected_types.get(i).unwrap();
+
+                                        if t.to_char() == e.to_char() {
+                                            continue;
+                                        } else if t.to_char() == 'R'
+                                            && e.to_char() == 'I'
+                                            && has_real_or_avg
+                                        {
+                                            // all good, change the type
+                                        } else {
+                                            ok = false;
+                                            break;
+                                        }
+                                    }
+
+                                    if ok {
+                                        // since we're updating the type note that
+                                        comments.extend(comments_from_types(
+                                            "Types were automatically converted from: ",
+                                            expected_types,
+                                            types,
+                                        ));
+                                        types.clone()
+                                    } else {
+                                        comments.extend(comments_from_types(
+                                            "Types mismatched:",
+                                            expected_types,
+                                            types,
+                                        ));
+                                        expected_types.clone()
+                                    }
+                                }
+                            } else {
+                                expected_types.clone()
+                            }
+                        }
+                        QueryExpect::Error(e) => {
+                            comments.extend(comments_from_error(&e.to_string()));
+                            types.clone()
+                        }
+                    };
+
+                    Some(RecordWithComments {
+                        record: Record::Query {
+                            sql,
+                            loc,
+                            conditions,
+                            connection,
+                            expected: match expected {
+                                QueryExpect::Results {
+                                    types: _,
+                                    sort_mode,
+                                    label,
+                                    result_mode,
+                                    results: _,
+                                } => QueryExpect::Results {
+                                    results: new_results,
+                                    types: new_types,
+                                    sort_mode,
+                                    result_mode,
+                                    label,
+                                },
+                                QueryExpect::Error(_) => QueryExpect::Results {
+                                    results: new_results,
+                                    types: new_types,
+                                    sort_mode: None,
+                                    result_mode: None,
+                                    label: None,
+                                },
                             },
                         },
-                    },
-                    comments: if comments.is_empty() { None } else { Some(comments) },
-                    should_skip,
-                })
+                        comments: if comments.is_empty() {
+                            None
+                        } else {
+                            Some(comments)
+                        },
+                        should_skip: false,
+                    })
+                }
             }
-        },
+        }
         (
             Record::System {
                 loc,
@@ -1848,7 +1899,11 @@ pub fn update_record_with_output<T: ColumnType>(
     }
 }
 
-fn comments_from_types<T: ColumnType>(prefix: &str, expected: &Vec<T>, actual: &Vec<T>) -> Vec<String> {
+fn comments_from_types<T: ColumnType>(
+    prefix: &str,
+    expected: &Vec<T>,
+    actual: &Vec<T>,
+) -> Vec<String> {
     let expected = expected.iter().map(|c| c.to_char()).join("");
     let actual = actual.iter().map(|c| c.to_char()).join("");
 
@@ -1861,14 +1916,8 @@ fn comments_from_types<T: ColumnType>(prefix: &str, expected: &Vec<T>, actual: &
                     format!("{}{}", expected, change.value()),
                     format!("{}{}", actual, change.value()),
                 ),
-                ChangeTag::Delete => (
-                    format!("{}[{}]", expected, change.value()),
-                    actual,
-                ),
-                ChangeTag::Insert => (
-                    expected,
-                    format!("{}[{}]", actual, change.value()),
-                ),
+                ChangeTag::Delete => (format!("{}[{}]", expected, change.value()), actual),
+                ChangeTag::Insert => (expected, format!("{}[{}]", actual, change.value())),
             },
         );
 
@@ -2313,8 +2362,10 @@ Caused by:
 
             let output = if let Some(o) = output {
                 Some(o.record)
-            } else { None };
-            
+            } else {
+                None
+            };
+
             assert_eq!(
                 &output,
                 &expected,
