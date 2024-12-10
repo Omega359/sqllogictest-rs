@@ -1741,25 +1741,20 @@ pub fn update_record_with_output<T: ColumnType>(
                             }
                             else {
                                 let mut ok = true;
+                                let has_real_or_avg = sql.contains(" REAL") || sql.contains(" AVG");
 
                                 // check the types, if I / R and sql contains avg or 'REAL'
                                 for i in 0 .. types.len() {
                                     let t = types.get(i).unwrap();
                                     let e = expected_types.get(i).unwrap();
 
-                                    if t.to_char() == 'R' && e.to_char() == 'I' {
-                                        if sql.contains(" REAL") || sql.contains("AVG") {
-                                            // all good, change the type
-                                        }
-                                        else {
-                                            ok = false;
-                                            comments.extend(comments_from_types("", expected_types, types));
-                                            break;
-                                        }
+                                    comments.push(format!("t = {}, e = {}, has_real_or_avg={has_real_or_avg}", t.to_char(), e.to_char()));
+
+                                    if t.to_char() == 'R' && e.to_char() == 'I' && has_real_or_avg {
+                                        // all good, change the type
                                     }
                                     else {
                                         ok = false;
-                                        comments.extend(comments_from_types("", expected_types, types));
                                         break;
                                     }
                                 }
