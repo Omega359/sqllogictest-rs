@@ -1658,7 +1658,7 @@ pub fn update_record_with_output<T: ColumnType>(
                     _ => rows.clone(),
                 };
 
-                let results = match &expected {
+                let new_results = match &expected {
                     QueryExpect::Results {
                         results: expected_results,
                         ..
@@ -1792,14 +1792,14 @@ pub fn update_record_with_output<T: ColumnType>(
                             QueryExpect::Results {
                                 types: _, sort_mode, label, result_mode, results,
                             } => QueryExpect::Results {
-                                results,
+                                results: new_results,
                                 types: new_types,
                                 sort_mode,
                                 result_mode,
                                 label,
                             },
                             QueryExpect::Error(_) => QueryExpect::Results {
-                                results,
+                                results: new_results,
                                 types: new_types,
                                 sort_mode: None,
                                 result_mode: None,
