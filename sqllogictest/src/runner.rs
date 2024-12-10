@@ -1748,9 +1748,10 @@ pub fn update_record_with_output<T: ColumnType>(
                                     let t = types.get(i).unwrap();
                                     let e = expected_types.get(i).unwrap();
 
-                                    comments.push(format!("t = {}, e = {}, has_real_or_avg={has_real_or_avg}", t.to_char(), e.to_char()));
-
-                                    if t.to_char() == 'R' && e.to_char() == 'I' && has_real_or_avg {
+                                    if t.to_char() == e.to_char() {
+                                        continue;
+                                    }
+                                    else if t.to_char() == 'R' && e.to_char() == 'I' && has_real_or_avg {
                                         // all good, change the type
                                     }
                                     else {
