@@ -1494,9 +1494,9 @@ fn parse_comment(comment: &str) -> String {
         c = "Error during planning: Projections require unique expression names".to_string();
     }
 
-    if c.contains("\"") {
-        c = c.split_once("\"").unwrap().0.to_string();
-    }
+    // if c.contains("\"") {
+    //     c = c.split_once("\"").unwrap().0.to_string();
+    // }
 
     c
 }
