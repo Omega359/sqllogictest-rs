@@ -1423,6 +1423,7 @@ impl<D: AsyncDB, M: MakeConnection<Conn = D>> Runner<D, M> {
                         validator,
                         normalizer,
                         column_type_validator,
+                        self.result_mode.unwrap_or(ResultMode::RowWise)
                     )
                     .unwrap_or(RecordWithComments {
                         record,
@@ -1496,6 +1497,7 @@ pub fn update_record_with_output<T: ColumnType>(
     validator: Validator,
     normalizer: Normalizer,
     column_type_validator: ColumnTypeValidator<T>,
+    result_mode: ResultMode,
 ) -> Option<RecordWithComments<T>> {
     match (record.clone(), record_output) {
         (_, RecordOutput::Nothing) => None,
@@ -1647,64 +1649,74 @@ pub fn update_record_with_output<T: ColumnType>(
                 let mut comments: Vec<String> = vec![];
                 let mut should_skip = false;
 
+                let actual_results = match result_mode {
+                    ResultMode::ValueWise =>
+                        rows.into_iter()
+                            .flat_map(|strs| strs.into_iter())
+                            .map(|str| vec![str.to_string()])
+                            .collect_vec(),
+                    _ => rows.clone(),
+                };
+
                 let results = match &expected {
                     QueryExpect::Results {
                         results: expected_results,
                         ..
-                    }
-                    if !validator(normalizer, rows, expected_results) && comparison_record_output.is_some() => {
-                        // see if the comparison matches the actual, if so update
-                        let comparison_rows = comparison_record_output.unwrap();
-                        let mut ok = true;
+                    } => {
+                        if !validator(normalizer, &actual_results, expected_results) && comparison_record_output.is_some() {
+                            // see if the comparison matches the actual, if so update
+                            let comparison_rows = comparison_record_output.unwrap();
+                            let mut ok = true;
 
-                        'outer: for i in 0..rows.len() {
-                            let actual = rows[i]
-                                .iter()
-                                // Editors do not preserve trailing whitespace, so expected may or may not lack it included
-                                .map(|s| s.trim_end().to_owned())
-                                .collect::<Vec<String>>();
-                            let comparison = comparison_rows[i]
-                                .iter()
-                                // Editors do not preserve trailing whitespace, so expected may or may not lack it included
-                                .map(|s| s.trim_end().to_owned())
-                                .collect::<Vec<String>>();
+                            'outer: for i in 0..actual_results.len() {
+                                let actual = actual_results[i]
+                                    .iter()
+                                    .map(normalizer)
+                                    .collect::<Vec<String>>();
+                                let comparison = comparison_rows[i]
+                                    .iter()
+                                    .map(normalizer)
+                                    .collect::<Vec<String>>();
 
-                            for j in 0..actual.len() {
-                                let s = actual[j].clone();
-                                let c = comparison[j].clone();
-                                if s == c {
-                                    // all good
-                                }
-                                else if s.parse::<f64>().is_ok() && c.parse::<f64>().is_ok() {
-                                    // both floats, test for equality
-                                    let f1 = s.parse::<f64>().unwrap();
-                                    let f2 = c.parse::<f64>().unwrap();
+                                for j in 0..actual.len() {
+                                    let s = actual[j].clone();
+                                    let c = comparison[j].clone();
+                                    if s == c {
+                                        // all good
+                                    } else if s.parse::<f64>().is_ok() && c.parse::<f64>().is_ok() {
+                                        // both floats, test for equality
+                                        let f1 = s.parse::<f64>().unwrap();
+                                        let f2 = c.parse::<f64>().unwrap();
 
-                                    if format!("{f1:.12}") != format!("{f2:.12}") {
-                                        comments.push(format!("{f1} did not eq {f2}"));
+                                        if format!("{f1:.12}") != format!("{f2:.12}") {
+                                            comments.push(format!("{f1} did not eq {f2}"));
+                                            ok = false;
+                                            break 'outer;
+                                        }
+                                    } else {
+                                        comments.push(format!("'{s}' did not eq '{c}'"));
                                         ok = false;
                                         break 'outer;
                                     }
                                 }
-                                else {
-                                    comments.push(format!("'{s}' did not eq '{c}'"));
-                                    ok = false;
-                                    break 'outer;
+                            }
+
+                            if ok {
+                                // since we're updating the data add note to that effect
+                                comments.push("Data was automatically updated based on compare with postgres results".to_string());
+                                comments.push("Previous results:".to_string());
+                                for r in expected_results.iter() {
+                                    comments.push(format!("{r}"));
                                 }
+
+                                actual_results.iter().map(|cols| cols.join(col_separator)).collect()
+                            }
+                            // else allow errors through so manual run can find them
+                            else {
+                                should_skip = true;
+                                expected_results.clone()
                             }
                         }
-
-                        if ok {
-                            // since we're updating the data add note to that effect
-                            comments.push("Data was automatically updated based on compare with postgres results".to_string());
-                            comments.push("Previous results:".to_string());
-                            for r in expected_results.iter() {
-                                comments.push(format!("{r}"));
-                            }
-
-                            rows.iter().map(|cols| cols.join(col_separator)).collect()
-                        }
-                        // else allow errors through so manual run can find them
                         else {
                             should_skip = true;
                             expected_results.clone()
@@ -2296,6 +2308,7 @@ Caused by:
                 default_validator,
                 default_normalizer,
                 strict_column_validator,
+                ResultMode::RowWise,
             );
 
             let output = if let Some(o) = output {
