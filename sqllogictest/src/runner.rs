@@ -1717,8 +1717,11 @@ pub fn update_record_with_output<T: ColumnType>(
                                 expected_results.clone()
                             }
                         }
-                        else {
+                        else if !validator(normalizer, &actual_results, expected_results) {
                             should_skip = true;
+                            expected_results.clone()
+                        }
+                        else {
                             expected_results.clone()
                         }
                     }
@@ -1767,7 +1770,7 @@ pub fn update_record_with_output<T: ColumnType>(
                                     types.clone()
                                 }
                                 else {
-                                    should_skip = true;
+                                    comments.extend(comments_from_types("Types mismatched:", expected_types, types));
                                     expected_types.clone()
                                 }
                             }
