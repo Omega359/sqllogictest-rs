@@ -1775,44 +1775,52 @@ pub fn update_record_with_output<T: ColumnType>(
                                     comments.extend(comments_from_types("", expected_types, types));
                                     expected_types.clone()
                                 } else {
-                                    let mut ok = true;
-                                    let has_real_or_avg =
-                                        sql.contains(" REAL") || sql.contains(" AVG");
+                                    // just set the types to the new types, add a note to reflect that
+                                    comments.extend(comments_from_types(
+                                        "Types were automatically converted from: ",
+                                        expected_types,
+                                        types,
+                                    ));
+                                    types.clone()
 
-                                    // check the types, if I / R and sql contains avg or 'REAL'
-                                    for i in 0..types.len() {
-                                        let t = types.get(i).unwrap();
-                                        let e = expected_types.get(i).unwrap();
-
-                                        if t.to_char() == e.to_char() {
-                                            continue;
-                                        } else if t.to_char() == 'R'
-                                            && e.to_char() == 'I'
-                                            && has_real_or_avg
-                                        {
-                                            // all good, change the type
-                                        } else {
-                                            ok = false;
-                                            break;
-                                        }
-                                    }
-
-                                    if ok {
-                                        // since we're updating the type note that
-                                        comments.extend(comments_from_types(
-                                            "Types were automatically converted from: ",
-                                            expected_types,
-                                            types,
-                                        ));
-                                        types.clone()
-                                    } else {
-                                        comments.extend(comments_from_types(
-                                            "Types mismatched:",
-                                            expected_types,
-                                            types,
-                                        ));
-                                        expected_types.clone()
-                                    }
+                                    // let mut ok = true;
+                                    // let has_real_or_avg =
+                                    //     sql.contains(" REAL") || sql.contains(" AVG");
+                                    //
+                                    // // check the types, if I / R and sql contains avg or 'REAL'
+                                    // for i in 0..types.len() {
+                                    //     let t = types.get(i).unwrap();
+                                    //     let e = expected_types.get(i).unwrap();
+                                    //
+                                    //     if t.to_char() == e.to_char() {
+                                    //         continue;
+                                    //     } else if t.to_char() == 'R'
+                                    //         && e.to_char() == 'I'
+                                    //         && has_real_or_avg
+                                    //     {
+                                    //         // all good, change the type
+                                    //     } else {
+                                    //         ok = false;
+                                    //         break;
+                                    //     }
+                                    // }
+                                    //
+                                    // if ok {
+                                    //     // since we're updating the type note that
+                                    //     comments.extend(comments_from_types(
+                                    //         "Types were automatically converted from: ",
+                                    //         expected_types,
+                                    //         types,
+                                    //     ));
+                                    //     types.clone()
+                                    // } else {
+                                    //     comments.extend(comments_from_types(
+                                    //         "Types mismatched:",
+                                    //         expected_types,
+                                    //         types,
+                                    //     ));
+                                    //     expected_types.clone()
+                                    // }
                                 }
                             } else {
                                 expected_types.clone()
