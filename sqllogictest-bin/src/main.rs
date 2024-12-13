@@ -16,7 +16,7 @@ use itertools::Itertools;
 use quick_junit::{NonSuccessKind, Report, TestCase, TestCaseStatus, TestSuite};
 use rand::distributions::DistString;
 use rand::seq::SliceRandom;
-use sqllogictest::{default_column_validator, default_normalizer, default_validator, update_record_with_output, AsyncDB, Injected, MakeConnection, Record, ResultMode, Runner};
+use sqllogictest::{default_column_validator, default_normalizer, default_validator, update_record_with_output, AsyncDB, DefaultColumnType, Injected, MakeConnection, Record, RecordOutput, ResultMode, Runner};
 
 #[derive(Default, Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
 #[must_use]
@@ -232,7 +232,7 @@ pub async fn main() -> Result<()> {
             &labels,
             junit.clone(),
         )
-        .await
+            .await
     } else {
         run_serial(
             &mut test_suite,
@@ -242,7 +242,7 @@ pub async fn main() -> Result<()> {
             &labels,
             junit.clone(),
         )
-        .await
+            .await
     };
 
     report.add_test_suite(test_suite);
@@ -311,8 +311,8 @@ async fn run_parallel(
                             .await;
                     (buf, res)
                 })
-                .await
-                .unwrap();
+                    .await
+                    .unwrap();
                 (file, res, buf)
             }
         })
@@ -583,7 +583,7 @@ async fn update_test_file<T: std::io::Write, M: MakeConnection>(
     let records = tokio::task::block_in_place(|| {
         sqllogictest::parse_file(filename).map_err(|e| anyhow!("{:?}", e))
     })
-    .context("failed to parse sqllogictest file")?;
+        .context("failed to parse sqllogictest file")?;
 
     let mut begin_times = vec![];
     let mut did_pop = false;
@@ -745,13 +745,12 @@ async fn update_record<M: MakeConnection>(
     match update_record_with_output(
         &record,
         &record_output,
-        None,
+        None::<RecordOutput<DefaultColumnType>>,
         "\t",
         default_validator,
         default_normalizer,
         default_column_validator,
         ResultMode::RowWise,
-
     ) {
         Some(new_record) => {
             writeln!(outfile, "{}", new_record.record)?;
