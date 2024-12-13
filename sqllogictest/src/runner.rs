@@ -1449,7 +1449,7 @@ impl<D: AsyncDB, M: MakeConnection<Conn=D>> Runner<D, M> {
                         for line in iter {
                             if line.starts_with("Postgres - ") {
                                 writeln!(outfile, "# {}", parse_comment(line.trim_end()))?;
-                            } else if line.starts_with("skipif postgres") {
+                            } else if line.starts_with("skipif postgresql") {
                                 should_skip_postgres = true;
                             } else {
                                 writeln!(outfile, "# Datafusion - {}", parse_comment(line.trim_end()))?;
@@ -1673,7 +1673,7 @@ pub fn update_record_with_output<T: ColumnType, D: ColumnType>(
                             RecordOutput::Query { error, .. } => {
                                 if let Some(err) = error {
                                     comments.extend(comments_from_error("Postgres - ", &err.to_string()));
-                                    comments.push("skipif postgres".to_string());
+                                    comments.push("skipif postgresql".to_string());
                                 }
                             }
                             _ => ()
