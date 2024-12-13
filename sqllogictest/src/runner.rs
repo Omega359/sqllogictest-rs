@@ -469,7 +469,7 @@ pub fn default_normalizer(s: &String) -> String {
 ///
 /// By default, the ([`default_validator`]) will be used compare normalized results.
 pub type Validator =
-fn(normalizer: Normalizer, actual: &[Vec<String>], expected: &[String]) -> bool;
+    fn(normalizer: Normalizer, actual: &[Vec<String>], expected: &[String]) -> bool;
 
 pub fn default_validator(
     normalizer: Normalizer,
@@ -506,9 +506,9 @@ pub fn default_column_validator<T: ColumnType>(_: &Vec<T>, _: &Vec<T>) -> bool {
 pub fn strict_column_validator<T: ColumnType>(actual: &Vec<T>, expected: &Vec<T>) -> bool {
     actual.len() == expected.len()
         && !actual
-        .iter()
-        .zip(expected.iter())
-        .any(|(actual_column, expected_column)| actual_column != expected_column)
+            .iter()
+            .zip(expected.iter())
+            .any(|(actual_column, expected_column)| actual_column != expected_column)
 }
 
 /// Sqllogictest runner.
@@ -528,7 +528,7 @@ pub struct Runner<D: AsyncDB, M: MakeConnection> {
     labels: HashSet<String>,
 }
 
-impl<D: AsyncDB, M: MakeConnection<Conn=D>> Runner<D, M> {
+impl<D: AsyncDB, M: MakeConnection<Conn = D>> Runner<D, M> {
     /// Create a new test runner on the database, with the given connection maker.
     ///
     /// See [`MakeConnection`] for more details.
@@ -705,10 +705,10 @@ impl<D: AsyncDB, M: MakeConnection<Conn=D>> Runner<D, M> {
                 let mut actual_stdout = None;
                 let error: Option<AnyError> = match result {
                     Ok(Output {
-                           status,
-                           stdout,
-                           stderr,
-                       }) => {
+                        status,
+                        stdout,
+                        stderr,
+                    }) => {
                         let stdout = String::from_utf8_lossy(&stdout).to_string();
                         let stderr = String::from_utf8_lossy(&stderr).to_string();
                         tracing::info!(target:"sqllogictest::system_command", command, ?status, stdout, stderr, "system command executed");
@@ -790,7 +790,7 @@ impl<D: AsyncDB, M: MakeConnection<Conn=D>> Runner<D, M> {
                     QueryExpect::Results { sort_mode, .. } => sort_mode,
                     QueryExpect::Error(_) => None,
                 }
-                    .or(self.sort_mode);
+                .or(self.sort_mode);
 
                 let mut value_sort = false;
                 match sort_mode {
@@ -899,7 +899,7 @@ impl<D: AsyncDB, M: MakeConnection<Conn=D>> Runner<D, M> {
                         sql,
                         kind: RecordKind::Query,
                     }
-                        .at(loc));
+                    .at(loc));
                 }
                 if let StatementExpect::Count(expected_count) = expected {
                     if expected_count != rows.len() as u64 {
@@ -908,7 +908,7 @@ impl<D: AsyncDB, M: MakeConnection<Conn=D>> Runner<D, M> {
                             expected: expected_count,
                             actual: format!("returned {} rows", rows.len()),
                         }
-                            .at(loc));
+                        .at(loc));
                     }
                 }
             }
@@ -923,7 +923,7 @@ impl<D: AsyncDB, M: MakeConnection<Conn=D>> Runner<D, M> {
                         sql,
                         kind: RecordKind::Query,
                     }
-                        .at(loc))
+                    .at(loc))
                 }
                 QueryExpect::Results { results, .. } if !results.is_empty() => {
                     return Err(TestErrorKind::QueryResultMismatch {
@@ -931,7 +931,7 @@ impl<D: AsyncDB, M: MakeConnection<Conn=D>> Runner<D, M> {
                         expected: results.join("\n"),
                         actual: "".to_string(),
                     }
-                        .at(loc))
+                    .at(loc))
                 }
                 QueryExpect::Results { .. } => {}
             },
@@ -950,7 +950,7 @@ impl<D: AsyncDB, M: MakeConnection<Conn=D>> Runner<D, M> {
                         sql,
                         kind: RecordKind::Statement,
                     }
-                        .at(loc))
+                    .at(loc))
                 }
                 (None, StatementExpect::Count(expected_count)) => {
                     if expected_count != *count {
@@ -959,7 +959,7 @@ impl<D: AsyncDB, M: MakeConnection<Conn=D>> Runner<D, M> {
                             expected: expected_count,
                             actual: format!("affected {count} rows"),
                         }
-                            .at(loc));
+                        .at(loc));
                     }
                 }
                 (None, StatementExpect::Ok) => {}
@@ -971,7 +971,7 @@ impl<D: AsyncDB, M: MakeConnection<Conn=D>> Runner<D, M> {
                             expected_err: expected_error.to_string(),
                             kind: RecordKind::Statement,
                         }
-                            .at(loc));
+                        .at(loc));
                     }
                 }
                 (Some(e), StatementExpect::Count(_) | StatementExpect::Ok) => {
@@ -980,7 +980,7 @@ impl<D: AsyncDB, M: MakeConnection<Conn=D>> Runner<D, M> {
                         err: Arc::clone(e),
                         kind: RecordKind::Statement,
                     }
-                        .at(loc));
+                    .at(loc));
                 }
             },
             (
@@ -999,7 +999,7 @@ impl<D: AsyncDB, M: MakeConnection<Conn=D>> Runner<D, M> {
                             sql,
                             kind: RecordKind::Query,
                         }
-                            .at(loc));
+                        .at(loc));
                     }
                     (Some(e), QueryExpect::Error(expected_error)) => {
                         if !expected_error.is_match(&e.to_string()) {
@@ -1009,7 +1009,7 @@ impl<D: AsyncDB, M: MakeConnection<Conn=D>> Runner<D, M> {
                                 expected_err: expected_error.to_string(),
                                 kind: RecordKind::Query,
                             }
-                                .at(loc));
+                            .at(loc));
                         }
                     }
                     (Some(e), QueryExpect::Results { .. }) => {
@@ -1018,7 +1018,7 @@ impl<D: AsyncDB, M: MakeConnection<Conn=D>> Runner<D, M> {
                             err: Arc::clone(e),
                             kind: RecordKind::Query,
                         }
-                            .at(loc));
+                        .at(loc));
                     }
                     (
                         None,
@@ -1034,7 +1034,7 @@ impl<D: AsyncDB, M: MakeConnection<Conn=D>> Runner<D, M> {
                                 expected: expected_types.iter().map(|c| c.to_char()).join(""),
                                 actual: types.iter().map(|c| c.to_char()).join(""),
                             }
-                                .at(loc));
+                            .at(loc));
                         }
 
                         let actual_results = match self.result_mode {
@@ -1055,7 +1055,7 @@ impl<D: AsyncDB, M: MakeConnection<Conn=D>> Runner<D, M> {
                                 expected: expected_results.join("\n"),
                                 actual: output_rows.join("\n"),
                             }
-                                .at(loc));
+                            .at(loc));
                         }
                     }
                 };
@@ -1077,7 +1077,7 @@ impl<D: AsyncDB, M: MakeConnection<Conn=D>> Runner<D, M> {
                         command,
                         err: Arc::clone(err),
                     }
-                        .at(loc));
+                    .at(loc));
                 }
                 match (expected_stdout, actual_stdout) {
                     (None, _) => {}
@@ -1090,7 +1090,7 @@ impl<D: AsyncDB, M: MakeConnection<Conn=D>> Runner<D, M> {
                                 expected_stdout,
                                 actual_stdout,
                             }
-                                .at(loc));
+                            .at(loc));
                         }
                     }
                 }
@@ -1118,7 +1118,7 @@ impl<D: AsyncDB, M: MakeConnection<Conn=D>> Runner<D, M> {
     /// To acquire the result of each record, manually call `run_async` for each record instead.
     pub async fn run_multi_async(
         &mut self,
-        records: impl IntoIterator<Item=Record<D::ColumnType>>,
+        records: impl IntoIterator<Item = Record<D::ColumnType>>,
     ) -> Result<(), TestError> {
         for record in records.into_iter() {
             if let Record::Halt { .. } = record {
@@ -1136,7 +1136,7 @@ impl<D: AsyncDB, M: MakeConnection<Conn=D>> Runner<D, M> {
     /// To acquire the result of each record, manually call `run` for each record instead.
     pub fn run_multi(
         &mut self,
-        records: impl IntoIterator<Item=Record<D::ColumnType>>,
+        records: impl IntoIterator<Item = Record<D::ColumnType>>,
     ) -> Result<(), TestError> {
         block_on(self.run_multi_async(records))
     }
@@ -1195,7 +1195,7 @@ impl<D: AsyncDB, M: MakeConnection<Conn=D>> Runner<D, M> {
         jobs: usize,
     ) -> Result<(), ParallelTestError>
     where
-        Fut: Future<Output=D>,
+        Fut: Future<Output = D>,
     {
         let files = glob::glob(glob).expect("failed to read glob pattern");
         let mut tasks = vec![];
@@ -1254,7 +1254,7 @@ impl<D: AsyncDB, M: MakeConnection<Conn=D>> Runner<D, M> {
         jobs: usize,
     ) -> Result<(), ParallelTestError>
     where
-        Fut: Future<Output=D>,
+        Fut: Future<Output = D>,
     {
         block_on(self.run_parallel_async(glob, hosts, conn_builder, jobs))
     }
@@ -1287,7 +1287,7 @@ impl<D: AsyncDB, M: MakeConnection<Conn=D>> Runner<D, M> {
     /// Some other notes:
     /// - empty lines at the end of the file are cleaned.
     /// - `halt` and `include` are correctly handled.
-    pub async fn update_test_file<OtherD: AsyncDB, OtherM: MakeConnection<Conn=OtherD>>(
+    pub async fn update_test_file<OtherD: AsyncDB, OtherM: MakeConnection<Conn = OtherD>>(
         &mut self,
         filename: impl AsRef<Path>,
         col_separator: &str,
@@ -1415,7 +1415,7 @@ impl<D: AsyncDB, M: MakeConnection<Conn=D>> Runner<D, M> {
                             &mut comparison_runner.as_mut().unwrap(),
                             comparison_record.clone(),
                         )
-                            .await;
+                        .await;
                         match output {
                             RecordOutput::Query { .. } => Some(output),
                             _ => None,
@@ -1434,25 +1434,28 @@ impl<D: AsyncDB, M: MakeConnection<Conn=D>> Runner<D, M> {
                         column_type_validator,
                         self.result_mode.unwrap_or(ResultMode::RowWise),
                     )
-                        .unwrap_or(RecordWithComments {
-                            record,
-                            comments: None,
-                            should_skip: false,
-                        });
+                    .unwrap_or(RecordWithComments {
+                        record,
+                        comments: None,
+                        should_skip: false,
+                    });
 
                     let mut should_skip_postgres = false;
 
                     if record_with_comments.comments.is_some() {
                         let comments = record_with_comments.comments.unwrap();
-                        let iter = comments.iter();
 
-                        for line in iter {
-                            if line.starts_with("Postgres - ") {
+                        for line in comments {
+                            if line.starts_with("Postgresql") {
                                 writeln!(outfile, "# {}", parse_comment(line.trim_end()))?;
                             } else if line.starts_with("skipif postgresql") {
                                 should_skip_postgres = true;
                             } else {
-                                writeln!(outfile, "# Datafusion - {}", parse_comment(line.trim_end()))?;
+                                writeln!(
+                                    outfile,
+                                    "# Datafusion - {}",
+                                    parse_comment(line.trim_end())
+                                )?;
                             }
                         }
                     }
@@ -1622,10 +1625,10 @@ pub fn update_record_with_output<T: ColumnType, D: ColumnType>(
             }),
             // Error match
             (Some(e), StatementExpect::Error(expected_error))
-            if expected_error.is_match(&e.to_string()) =>
-                {
-                    None
-                }
+                if expected_error.is_match(&e.to_string()) =>
+            {
+                None
+            }
             // Error mismatch, update expected error
             (Some(e), r) => {
                 Some(RecordWithComments {
@@ -1659,10 +1662,10 @@ pub fn update_record_with_output<T: ColumnType, D: ColumnType>(
             match (error, expected) {
                 // Error match
                 (Some(e), QueryExpect::Error(expected_error))
-                if expected_error.is_match(&e.to_string()) =>
-                    {
-                        None
-                    }
+                    if expected_error.is_match(&e.to_string()) =>
+                {
+                    None
+                }
                 // Error mismatch
                 (Some(e), r) => {
                     let mut comments = comments_from_error("", &e.to_string());
@@ -1672,11 +1675,14 @@ pub fn update_record_with_output<T: ColumnType, D: ColumnType>(
                         match compare {
                             RecordOutput::Query { error, .. } => {
                                 if let Some(err) = error {
-                                    comments.extend(comments_from_error("Postgres - ", &err.to_string()));
+                                    comments.extend(comments_from_error(
+                                        "Postgresql",
+                                        &err.to_string(),
+                                    ));
                                     comments.push("skipif postgresql".to_string());
                                 }
                             }
-                            _ => ()
+                            _ => (),
                         }
                     }
 
@@ -1719,7 +1725,7 @@ pub fn update_record_with_output<T: ColumnType, D: ColumnType>(
                                 // see if the comparison matches the actual, if so update
                                 let comparison_rows = match comparison_record_output.unwrap() {
                                     RecordOutput::Query { rows, .. } => rows,
-                                    _ => vec![]
+                                    _ => vec![],
                                 };
 
                                 let mut ok = true;
@@ -1972,13 +1978,16 @@ fn comments_from_types<T: ColumnType>(
 
 fn comments_from_error(prefix: &str, actual_err: &String) -> Vec<String> {
     let trimmed_err = actual_err.trim();
-    trimmed_err.lines().map(|s| {
-        if "" != prefix {
-            format!("{} - {}", prefix, s)
-        } else {
-            s.to_string()
-        }
-    }).collect_vec()
+    trimmed_err
+        .lines()
+        .map(|s| {
+            if "" != prefix {
+                format!("{} - {}", prefix, s)
+            } else {
+                s.to_string()
+            }
+        })
+        .collect_vec()
 }
 
 #[cfg(test)]
@@ -2004,7 +2013,7 @@ mod tests {
 
             expected: Some(record),
         }
-            .run()
+        .run()
     }
 
     #[test]
@@ -2029,7 +2038,7 @@ mod tests {
                  3 4",
             ),
         }
-            .run()
+        .run()
     }
 
     #[test]
@@ -2053,7 +2062,7 @@ mod tests {
                  3 4",
             ),
         }
-            .run()
+        .run()
     }
 
     #[test]
@@ -2070,7 +2079,7 @@ mod tests {
             // No update
             expected: None,
         }
-            .run()
+        .run()
     }
 
     #[test]
@@ -2089,7 +2098,7 @@ mod tests {
                  select * from foo;\n",
             ),
         }
-            .run()
+        .run()
     }
 
     #[test]
@@ -2113,7 +2122,7 @@ Caused by:
   Inner Error",
             ),
         }
-            .run()
+        .run()
     }
 
     #[test]
@@ -2134,7 +2143,7 @@ Caused by:
                  create table foo;",
             ),
         }
-            .run()
+        .run()
     }
 
     #[test]
@@ -2153,7 +2162,7 @@ Caused by:
                  select * from foo;",
             ),
         }
-            .run()
+        .run()
     }
 
     #[test]
@@ -2176,7 +2185,7 @@ Caused by:
                  insert into foo values(2);",
             ),
         }
-            .run()
+        .run()
     }
 
     #[test]
@@ -2194,7 +2203,7 @@ Caused by:
                  insert into foo values(2);",
             ),
         }
-            .run()
+        .run()
     }
 
     #[test]
@@ -2211,7 +2220,7 @@ Caused by:
             // update
             expected: None,
         }
-            .run()
+        .run()
     }
 
     #[test]
@@ -2230,7 +2239,7 @@ Caused by:
                  insert into foo values(2);",
             ),
         }
-            .run()
+        .run()
     }
 
     #[test]
@@ -2254,7 +2263,7 @@ Caused by:
   Inner Error",
             ),
         }
-            .run()
+        .run()
     }
 
     #[test]
@@ -2273,7 +2282,7 @@ Caused by:
                  insert into foo values(2);",
             ),
         }
-            .run()
+        .run()
     }
 
     #[test]
@@ -2297,7 +2306,7 @@ Caused by:
   Inner Error",
             ),
         }
-            .run()
+        .run()
     }
 
     #[test]
@@ -2334,7 +2343,7 @@ Caused by:
             // no update expected
             expected: None,
         }
-            .run()
+        .run()
     }
 
     #[test]
@@ -2371,7 +2380,7 @@ Caused by:
             // no update expected
             expected: None,
         }
-            .run()
+        .run()
     }
 
     #[derive(Debug)]
