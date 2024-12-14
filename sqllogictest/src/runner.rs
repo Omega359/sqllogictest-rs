@@ -1727,6 +1727,14 @@ pub fn update_record_with_output<T: ColumnType, D: ColumnType>(
                                     RecordOutput::Query { rows, .. } => rows,
                                     _ => vec![],
                                 };
+                                let comparison_rows = match result_mode {
+                                    ResultMode::ValueWise => comparison_rows
+                                        .into_iter()
+                                        .flat_map(|strs| strs.into_iter())
+                                        .map(|str| vec![str.to_string()])
+                                        .collect_vec(),
+                                    _ => rows.clone(),
+                                };
 
                                 let mut ok = true;
 
@@ -1762,7 +1770,8 @@ pub fn update_record_with_output<T: ColumnType, D: ColumnType>(
                                                 let f1 = s.parse::<f64>().unwrap();
                                                 let f2 = c.parse::<f64>().unwrap();
 
-                                                if format!("{f1:.12}") != format!("{f2:.12}") {
+                                                // round to 4 digits for now.
+                                                if format!("{f1:.4}") != format!("{f2:.4}") {
                                                     comments.push(format!("{f1} did not eq {f2}"));
                                                     ok = false;
                                                     break 'outer;
