@@ -154,7 +154,7 @@ pub struct TestErrorDisplay<'a> {
     colorize: bool,
 }
 
-impl<'a> Display for TestErrorDisplay<'a> {
+impl Display for TestErrorDisplay<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
@@ -189,7 +189,7 @@ pub struct ParallelTestErrorDisplay<'a> {
     colorize: bool,
 }
 
-impl<'a> Display for ParallelTestErrorDisplay<'a> {
+impl Display for ParallelTestErrorDisplay<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "parallel test failed")?;
         write!(f, "Caused by:")?;
@@ -333,7 +333,7 @@ pub struct TestErrorKindDisplay<'a> {
     colorize: bool,
 }
 
-impl<'a> Display for TestErrorKindDisplay<'a> {
+impl Display for TestErrorKindDisplay<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if !self.colorize {
             return write!(f, "{}", self.error);
@@ -1039,8 +1039,8 @@ impl<D: AsyncDB, M: MakeConnection<Conn = D>> Runner<D, M> {
 
                         let actual_results = match self.result_mode {
                             Some(ResultMode::ValueWise) => rows
-                                .into_iter()
-                                .flat_map(|strs| strs.into_iter())
+                                .iter()
+                                .flat_map(|strs| strs.iter())
                                 .map(|str| vec![str.to_string()])
                                 .collect_vec(),
                             // default to rowwise
