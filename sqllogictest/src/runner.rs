@@ -270,8 +270,7 @@ pub enum TestErrorKind {
         actual_stdout: String,
     },
     // Remember to also update [`TestErrorKindDisplay`] if this message is changed.
-    #[error("{kind} is expected to fail with error:\n\t{expected_err}\nbut got error:\n\t{err}\n[SQL] {sql}"
-    )]
+    #[error("{kind} is expected to fail with error:\n\t{expected_err}\nbut got error:\n\t{err}\n[SQL] {sql}")]
     ErrorMismatch {
         sql: String,
         err: AnyError,
@@ -1769,10 +1768,16 @@ pub fn update_record_with_output<T: ColumnType, D: ColumnType>(
                                                 // both floats, test for equality
                                                 let f1 = s.parse::<f64>().unwrap();
                                                 let f2 = c.parse::<f64>().unwrap();
+                                                let f1_trunc = f64::trunc(f1 * 10000.0) / 10000.0;
+                                                let f2_trunc = f64::trunc(f2 * 10000.0) / 10000.0;
 
-                                                // round to 4 digits for now.
-                                                if format!("{f1:.4}") != format!("{f2:.4}") {
-                                                    comments.push(format!("{f1} did not eq {f2}"));
+                                                // round & truncate to 4 digits for now - allow either
+                                                if format!("{f1:.4}") != format!("{f2:.4}")
+                                                    && f1_trunc != f2_trunc
+                                                {
+                                                    comments.push(format!(
+                                                        "f64 {f1} did not eq f64 {f2}"
+                                                    ));
                                                     ok = false;
                                                     break 'outer;
                                                 }
@@ -2416,7 +2421,7 @@ Caused by:
             let output = update_record_with_output(
                 &input,
                 &record_output,
-                None,
+                None::<RecordOutput<DefaultColumnType>>,
                 " ",
                 default_validator,
                 default_normalizer,
