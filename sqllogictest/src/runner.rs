@@ -1670,7 +1670,7 @@ pub fn update_record_with_output<T: ColumnType, D: ColumnType>(
                 }
                 // Error mismatch
                 (Some(e), r) => {
-                    let mut comments = comments_from_error("", &e.to_string());
+                    let mut comments = vec![]; // comments_from_error("", &e.to_string());
 
                     // add in comparison error to comments with a skipif compare
                     if let Some(compare) = comparison_record_output {
