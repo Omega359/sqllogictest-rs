@@ -1630,20 +1630,23 @@ pub fn update_record_with_output<T: ColumnType, D: ColumnType>(
             }
             // Error mismatch, update expected error
             (Some(e), r) => {
+                let reference = match &r {
+                    StatementExpect::Error(e) => Some(e),
+                    StatementExpect::Count(_) | StatementExpect::Ok => None,
+                };
                 Some(RecordWithComments {
                     record: Record::Statement {
                         sql,
-                        // expected: StatementExpect::Error(ExpectedError::from_actual_error(
-                        //     reference,
-                        //     &e.to_string(),
-                        // )),
+                        expected: StatementExpect::Error(ExpectedError::from_actual_error(
+                            reference,
+                            &e.to_string(),
+                        )),
                         loc,
                         conditions,
                         connection,
-                        expected: r,
                     },
                     comments: Some(comments_from_error("", &e.to_string())),
-                    should_skip: true,
+                    should_skip: false,
                 })
             }
         },
@@ -1685,20 +1688,31 @@ pub fn update_record_with_output<T: ColumnType, D: ColumnType>(
                         }
                     }
 
+                    let reference = match &r {
+                        QueryExpect::Error(e) => Some(e),
+                        QueryExpect::Results { .. } => None,
+                    };
+
+                    let expected_results = match &r {
+                        QueryExpect::Results { results, .. } => results,
+                        _ => &vec![],
+                    };
+                    comments.push("Datafusion expected results:".to_string());
+                    comments.extend(comments_from_results(expected_results));
+
                     Some(RecordWithComments {
                         record: Record::Query {
                             sql,
-                            // expected: QueryExpect::Error(ExpectedError::from_actual_error(
-                            //     reference,
-                            //     &e.to_string(),
-                            // )),
+                            expected: QueryExpect::Error(ExpectedError::from_actual_error(
+                                reference,
+                                &e.to_string(),
+                            )),
                             loc,
                             conditions,
                             connection,
-                            expected: r,
                         },
                         comments: Some(comments),
-                        should_skip: true,
+                        should_skip: false,
                     })
                 }
                 (None, expected) => {
@@ -1987,6 +2001,20 @@ fn comments_from_types<T: ColumnType>(
     }
     comments.push(format!("[Expected] {expected}"));
     comments.push(format!("[Actual  ] {actual}"));
+    comments
+}
+
+fn comments_from_results(results: &Vec<String>) -> Vec<String> {
+    let mut comments = vec![];
+
+    if results.is_empty() {
+        return comments;
+    }
+
+    for result in results {
+        comments.push(format!("Expected - {result}"));
+    }
+
     comments
 }
 
