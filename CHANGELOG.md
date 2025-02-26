@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## [0.27.2] - 2025-02-18
+
+* engines/bin: fix stdin to be closed properly to avoid hangs in the `external` engine.
+
+## [0.27.1] - 2025-02-17
+
+* runner: Add `Runner::set_var` method to allow adding runner-local variables for substitution.
+* bin: Add `__DATABASE__` variable for accessing current database name from SLT files.
+
+## [0.27.0] - 2025-02-11
+
+* runner: add `shutdown` method to `DB` and `AsyncDB` trait to allow for graceful shutdown of the database connection. Users are encouraged to call `Runner::shutdown` or `Runner::shutdown_async` after running tests to ensure that the database connections are properly closed.
+
+## [0.26.4] - 2025-01-27
+
+* runner: add random string in path generation to avoid conflict when using `include`.
+* bin: detect connection refused error and exit early to make error message clearer.
+
+## [0.26.3] - 2025-01-14
+
+* bin: when `--fail-fast` is enabled, abort all remaining connections before dropping temporary databases.
+
+## [0.26.2] - 2025-01-08
+
+* bin: support `--fail-fast`, and add env vars `SLT_FAIL_FAST` and `SLT_KEEP_DB_ON_FAILURE`
+
+## [0.26.1] - 2025-01-08
+
+* parser/runner: support `system ok retry`
+
+## [0.26.0] - 2025-01-06
+
+* parser: Add back `label` support, which was removed in 0.25.0.
+* parser/runner: support `[statement|query] error retry` (Only support multi-line error message)
+
+## [0.25.0] - 2024-12-26
+
+* runner: Add `retry` clause to `statement ok` and `query ok|error`.
+
 ## [0.24.0] - 2024-12-20
 
 * runner: Added a `Normalizer` type for normalizing result values. A new function

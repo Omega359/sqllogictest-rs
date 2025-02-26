@@ -1,10 +1,10 @@
 //! Sqllogictest runner.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::fmt::{Debug, Display};
 use std::path::Path;
 use std::process::{Command, ExitStatus, Output};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use std::vec;
 
@@ -14,7 +14,9 @@ use futures::{stream, Future, FutureExt, StreamExt};
 use itertools::Itertools;
 use md5::Digest;
 use owo_colors::OwoColorize;
+use rand::Rng;
 use similar::{Change, ChangeTag, TextDiff};
+use tempfile::TempDir;
 
 use crate::parser::*;
 use crate::substitution::Substitution;
@@ -71,6 +73,9 @@ pub trait AsyncDB {
     /// Async run a SQL query and return the output.
     async fn run(&mut self, sql: &str) -> Result<DBOutput<Self::ColumnType>, Self::Error>;
 
+    /// Shutdown the connection gracefully.
+    async fn shutdown(&mut self);
+
     /// Engine name of current database.
     fn engine_name(&self) -> &str {
         ""
@@ -105,6 +110,9 @@ pub trait DB {
     /// Run a SQL query and return the output.
     fn run(&mut self, sql: &str) -> Result<DBOutput<Self::ColumnType>, Self::Error>;
 
+    /// Shutdown the connection gracefully.
+    fn shutdown(&mut self) {}
+
     /// Engine name of current database.
     fn engine_name(&self) -> &str {
         ""
@@ -122,6 +130,10 @@ where
 
     async fn run(&mut self, sql: &str) -> Result<DBOutput<Self::ColumnType>, Self::Error> {
         D::run(self, sql)
+    }
+
+    async fn shutdown(&mut self) {
+        D::shutdown(self);
     }
 
     fn engine_name(&self) -> &str {
@@ -510,21 +522,53 @@ pub fn strict_column_validator<T: ColumnType>(actual: &Vec<T>, expected: &Vec<T>
             .any(|(actual_column, expected_column)| actual_column != expected_column)
 }
 
+#[derive(Default)]
+pub(crate) struct RunnerLocals {
+    /// The temporary directory. Test cases can use `__TEST_DIR__` to refer to this directory.
+    /// Lazily initialized and cleaned up when dropped.
+    test_dir: OnceLock<TempDir>,
+    /// Runtime variables for substitution.
+    variables: BTreeMap<String, String>,
+}
+
+impl RunnerLocals {
+    pub fn test_dir(&self) -> String {
+        let test_dir = self
+            .test_dir
+            .get_or_init(|| TempDir::new().expect("failed to create testdir"));
+        test_dir.path().to_string_lossy().into_owned()
+    }
+
+    fn set_var(&mut self, key: String, value: String) {
+        self.variables.insert(key, value);
+    }
+
+    pub fn get_var(&self, key: &str) -> Option<&String> {
+        self.variables.get(key)
+    }
+
+    pub fn vars(&self) -> &BTreeMap<String, String> {
+        &self.variables
+    }
+}
+
 /// Sqllogictest runner.
-pub struct Runner<D: AsyncDB, M: MakeConnection> {
+pub struct Runner<D: AsyncDB, M: MakeConnection<Conn = D>> {
     conn: Connections<D, M>,
     // validator is used for validate if the result of query equals to expected.
     validator: Validator,
     // normalizer is used to normalize the result text
     normalizer: Normalizer,
     column_type_validator: ColumnTypeValidator<D::ColumnType>,
-    substitution: Option<Substitution>,
+    substitution_on: bool,
     sort_mode: Option<SortMode>,
     result_mode: Option<ResultMode>,
     /// 0 means never hashing
     hash_threshold: usize,
     /// Labels for condition `skipif` and `onlyif`.
     labels: HashSet<String>,
+    /// Local variables/context for the runner.
+    locals: RunnerLocals,
 }
 
 impl<D: AsyncDB, M: MakeConnection<Conn = D>> Runner<D, M> {
@@ -536,18 +580,24 @@ impl<D: AsyncDB, M: MakeConnection<Conn = D>> Runner<D, M> {
             validator: default_validator,
             normalizer: default_normalizer,
             column_type_validator: default_column_validator,
-            substitution: None,
+            substitution_on: false,
             sort_mode: None,
             result_mode: None,
             hash_threshold: 0,
             labels: HashSet::new(),
             conn: Connections::new(make_conn),
+            locals: RunnerLocals::default(),
         }
     }
 
     /// Add a label for condition `skipif` and `onlyif`.
     pub fn add_label(&mut self, label: &str) {
         self.labels.insert(label.to_string());
+    }
+
+    /// Set a local variable for substitution.
+    pub fn set_var(&mut self, key: String, value: String) {
+        self.locals.set_var(key, value);
     }
 
     pub fn with_normalizer(&mut self, normalizer: Normalizer) {
@@ -596,6 +646,7 @@ impl<D: AsyncDB, M: MakeConnection<Conn = D>> Runner<D, M> {
                 // compare result in run_async
                 expected: _,
                 loc: _,
+                retry: _,
             } => {
                 let sql = match self.may_substitute(sql, true) {
                     Ok(sql) => sql,
@@ -643,6 +694,7 @@ impl<D: AsyncDB, M: MakeConnection<Conn = D>> Runner<D, M> {
                 command,
                 loc: _,
                 stdout: expected_stdout,
+                retry: _,
             } => {
                 if should_skip(&self.labels, "", &conditions) {
                     return RecordOutput::Nothing;
@@ -743,6 +795,7 @@ impl<D: AsyncDB, M: MakeConnection<Conn = D>> Runner<D, M> {
                 // compare result in run_async
                 expected,
                 loc: _,
+                retry: _,
             } => {
                 let sql = match self.may_substitute(sql, true) {
                     Ok(sql) => sql,
@@ -848,11 +901,7 @@ impl<D: AsyncDB, M: MakeConnection<Conn = D>> Runner<D, M> {
                     Control::ResultMode(result_mode) => {
                         self.result_mode = Some(result_mode);
                     }
-                    Control::Substitution(on_off) => match (&mut self.substitution, on_off) {
-                        (s @ None, true) => *s = Some(Substitution::default()),
-                        (s @ Some(_), false) => *s = None,
-                        _ => {}
-                    },
+                    Control::Substitution(on_off) => self.substitution_on = on_off,
                 }
 
                 RecordOutput::Nothing
@@ -877,6 +926,37 @@ impl<D: AsyncDB, M: MakeConnection<Conn = D>> Runner<D, M> {
 
     /// Run a single record.
     pub async fn run_async(
+        &mut self,
+        record: Record<D::ColumnType>,
+    ) -> Result<RecordOutput<D::ColumnType>, TestError> {
+        let retry = match &record {
+            Record::Statement { retry, .. } => retry.clone(),
+            Record::Query { retry, .. } => retry.clone(),
+            Record::System { retry, .. } => retry.clone(),
+            _ => None,
+        };
+        if retry.is_none() {
+            return self.run_async_no_retry(record).await;
+        }
+
+        // Retry for `retry.attempts` times. The parser ensures that `retry.attempts` must > 0.
+        let retry = retry.unwrap();
+        let mut last_error = None;
+        for _ in 0..retry.attempts {
+            let result = self.run_async_no_retry(record.clone()).await;
+            if result.is_ok() {
+                return result;
+            }
+            tracing::warn!(target:"sqllogictest::retry", backoff = ?retry.backoff, error = ?result, "retrying");
+            D::sleep(retry.backoff).await;
+            last_error = result.err();
+        }
+
+        Err(last_error.unwrap())
+    }
+
+    /// Run a single record without retry.
+    async fn run_async_no_retry(
         &mut self,
         record: Record<D::ColumnType>,
     ) -> Result<RecordOutput<D::ColumnType>, TestError> {
@@ -941,6 +1021,7 @@ impl<D: AsyncDB, M: MakeConnection<Conn = D>> Runner<D, M> {
                     conditions: _,
                     sql,
                     expected,
+                    retry: _,
                 },
                 RecordOutput::Statement { count, error },
             ) => match (error, expected) {
@@ -989,6 +1070,7 @@ impl<D: AsyncDB, M: MakeConnection<Conn = D>> Runner<D, M> {
                     connection: _,
                     sql,
                     expected,
+                    retry: _,
                 },
                 RecordOutput::Query { types, rows, error },
             ) => {
@@ -1065,6 +1147,7 @@ impl<D: AsyncDB, M: MakeConnection<Conn = D>> Runner<D, M> {
                     conditions: _,
                     command,
                     stdout: expected_stdout,
+                    retry: _,
                 },
                 RecordOutput::System {
                     error,
@@ -1212,6 +1295,9 @@ impl<D: AsyncDB, M: MakeConnection<Conn = D>> Runner<D, M> {
                 .expect("create db failed");
             let target = hosts[idx % hosts.len()].clone();
 
+            let mut locals = RunnerLocals::default();
+            locals.set_var("__DATABASE__".to_owned(), db_name.clone());
+
             let mut tester = Runner {
                 conn: Connections::new(move || {
                     conn_builder(target.clone(), db_name.clone()).map(Ok)
@@ -1219,11 +1305,12 @@ impl<D: AsyncDB, M: MakeConnection<Conn = D>> Runner<D, M> {
                 validator: self.validator,
                 normalizer: self.normalizer,
                 column_type_validator: self.column_type_validator,
-                substitution: self.substitution.clone(),
+                substitution_on: self.substitution_on,
                 sort_mode: self.sort_mode,
                 result_mode: self.result_mode,
                 hash_threshold: self.hash_threshold,
                 labels: self.labels.clone(),
+                locals,
             };
 
             tasks.push(async move {
@@ -1269,9 +1356,9 @@ impl<D: AsyncDB, M: MakeConnection<Conn = D>> Runner<D, M> {
     /// This is useful for `system` commands: The shell can do the environment variables, and we can
     /// write strings like `\n` without escaping.
     fn may_substitute(&self, input: String, subst_env_vars: bool) -> Result<String, AnyError> {
-        if let Some(substitution) = &self.substitution {
-            substitution
-                .substitute(&input, subst_env_vars)
+        if self.substitution_on {
+            Substitution::new(&self.locals, subst_env_vars)
+                .substitute(&input)
                 .map_err(|e| Arc::new(e) as AnyError)
         } else {
             Ok(input)
@@ -1302,7 +1389,12 @@ impl<D: AsyncDB, M: MakeConnection<Conn = D>> Runner<D, M> {
 
         fn create_outfile(filename: impl AsRef<Path>) -> std::io::Result<(PathBuf, File)> {
             let filename = filename.as_ref();
-            let outfilename = filename.file_name().unwrap().to_str().unwrap().to_owned() + ".temp";
+            let outfilename = format!(
+                "{}{:010}{}",
+                filename.file_name().unwrap().to_str().unwrap().to_owned(),
+                rand::thread_rng().gen_range(0..10_000_000),
+                ".temp"
+            );
             let outfilename = filename.parent().unwrap().join(outfilename);
             // create a temp file in read-write mode
             let outfile = OpenOptions::new()
@@ -1495,6 +1587,19 @@ impl<D: AsyncDB, M: MakeConnection<Conn = D>> Runner<D, M> {
     }
 }
 
+impl<D: AsyncDB, M: MakeConnection<Conn = D>> Runner<D, M> {
+    /// Shutdown all connections in the runner.
+    pub async fn shutdown_async(&mut self) {
+        tracing::debug!("shutting down runner...");
+        self.conn.shutdown_all().await;
+    }
+
+    /// Shutdown all connections in the runner.
+    pub fn shutdown(&mut self) {
+        block_on(self.shutdown_async());
+    }
+}
+
 fn parse_comment(comment: &str) -> String {
     let mut c = comment.replace("\n", " ");
     if let Some((_prefix, suffix)) = c.split_once("DataFusion error: ") {
@@ -1546,6 +1651,7 @@ pub fn update_record_with_output<T: ColumnType, D: ColumnType>(
                 conditions,
                 connection,
                 expected: mut expected @ (StatementExpect::Ok | StatementExpect::Count(_)),
+                retry,
             },
             RecordOutput::Query {
                 error: None, rows, ..
@@ -1569,6 +1675,7 @@ pub fn update_record_with_output<T: ColumnType, D: ColumnType>(
                     conditions,
                     connection,
                     expected,
+                    retry,
                 },
                 comments: None,
                 should_skip: false,
@@ -1582,6 +1689,7 @@ pub fn update_record_with_output<T: ColumnType, D: ColumnType>(
                 conditions,
                 connection,
                 expected: _,
+                retry,
             },
             RecordOutput::Statement { error: None, count },
         ) => Some(RecordWithComments {
@@ -1591,6 +1699,7 @@ pub fn update_record_with_output<T: ColumnType, D: ColumnType>(
                 conditions,
                 connection,
                 expected: StatementExpect::Count(*count),
+                retry,
             },
             comments: None,
             should_skip: false,
@@ -1603,6 +1712,7 @@ pub fn update_record_with_output<T: ColumnType, D: ColumnType>(
                 connection,
                 sql,
                 expected,
+                retry,
             },
             RecordOutput::Statement { count: _, error },
         ) => match (error, expected) {
@@ -1618,6 +1728,7 @@ pub fn update_record_with_output<T: ColumnType, D: ColumnType>(
                     //     StatementExpect::Error(_) | StatementExpect::Ok => StatementExpect::Ok,
                     // },
                     expected,
+                    retry,
                 },
                 comments: None,
                 should_skip: false,
@@ -1644,6 +1755,7 @@ pub fn update_record_with_output<T: ColumnType, D: ColumnType>(
                         loc,
                         conditions,
                         connection,
+                        retry,
                     },
                     comments: Some(comments_from_error("", &e.to_string())),
                     should_skip: false,
@@ -1658,6 +1770,7 @@ pub fn update_record_with_output<T: ColumnType, D: ColumnType>(
                 connection,
                 sql,
                 expected,
+                retry,
             },
             RecordOutput::Query { types, rows, error },
         ) => {
@@ -1710,6 +1823,7 @@ pub fn update_record_with_output<T: ColumnType, D: ColumnType>(
                             loc,
                             conditions,
                             connection,
+                            retry,
                         },
                         comments: Some(comments),
                         should_skip: false,
@@ -1943,6 +2057,7 @@ pub fn update_record_with_output<T: ColumnType, D: ColumnType>(
                 conditions,
                 command,
                 stdout: _,
+                retry,
             },
             RecordOutput::System {
                 stdout: actual_stdout,
@@ -1962,6 +2077,7 @@ pub fn update_record_with_output<T: ColumnType, D: ColumnType>(
                     conditions,
                     command,
                     stdout: actual_stdout.clone(),
+                    retry,
                 },
                 comments: None,
                 should_skip: false,

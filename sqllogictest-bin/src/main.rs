@@ -16,8 +16,10 @@ use itertools::Itertools;
 use quick_junit::{NonSuccessKind, Report, TestCase, TestCaseStatus, TestSuite};
 use rand::distributions::DistString;
 use rand::seq::SliceRandom;
+use sqllogictest::substitution::well_known;
 use sqllogictest::{default_column_validator, default_normalizer, default_validator, update_record_with_output,
     AsyncDB, DefaultColumnType, Injected, MakeConnection, Record, RecordOutput, ResultMode, Runner};
+use tokio_util::task::AbortOnDropHandle;
 
 #[derive(Default, Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
 #[must_use]
@@ -61,8 +63,12 @@ struct Opt {
     #[clap(long, short)]
     jobs: Option<usize>,
     /// When using `-j`, whether to keep the temporary database when a test case fails.
-    #[clap(long, default_value = "false")]
+    #[clap(long, default_value = "false", env = "SLT_KEEP_DB_ON_FAILURE")]
     keep_db_on_failure: bool,
+
+    /// Whether to exit immediately when a test case fails.
+    #[clap(long, default_value = "false", env = "SLT_FAIL_FAST")]
+    fail_fast: bool,
 
     /// Report to junit XML.
     #[clap(long)]
@@ -148,6 +154,7 @@ pub async fn main() -> Result<()> {
         color,
         jobs,
         keep_db_on_failure,
+        fail_fast,
         junit,
         host,
         port,
@@ -237,6 +244,7 @@ pub async fn main() -> Result<()> {
             config,
             &labels,
             junit.clone(),
+            fail_fast,
         )
             .await
     } else {
@@ -247,6 +255,7 @@ pub async fn main() -> Result<()> {
             config,
             &labels,
             junit.clone(),
+            fail_fast,
         )
             .await
     };
@@ -270,6 +279,7 @@ async fn run_parallel(
     config: DBConfig,
     labels: &[String],
     junit: Option<String>,
+    fail_fast: bool,
 ) -> Result<()> {
     let mut create_databases = BTreeMap::new();
     let mut filenames = BTreeSet::new();
@@ -304,7 +314,7 @@ async fn run_parallel(
         }
     }
 
-    let mut stream = futures::stream::iter(create_databases.into_iter())
+    let mut stream = futures::stream::iter(create_databases)
         .map(|(db_name, filename)| {
             let mut config = config.clone();
             config.db.clone_from(&db_name);
@@ -312,13 +322,13 @@ async fn run_parallel(
             let engine = engine.clone();
             let labels = labels.to_vec();
             async move {
-                let (buf, res) = tokio::spawn(async move {
+                let (buf, res) = AbortOnDropHandle::new(tokio::spawn(async move {
                     let mut buf = vec![];
                     let res =
                         connect_and_run_test_file(&mut buf, filename, &engine, config, &labels)
                             .await;
                     (buf, res)
-                })
+                }))
                 .await
                 .unwrap();
                 (db_name, file, res, buf)
@@ -330,11 +340,14 @@ async fn run_parallel(
 
     let mut failed_case = vec![];
     let mut failed_db: HashSet<String> = HashSet::new();
+    let mut remaining_files: HashSet<String> = HashSet::from_iter(filenames.clone());
 
     let start = Instant::now();
-
+    let mut connection_refused = false;
     while let Some((db_name, file, res, mut buf)) = stream.next().await {
+        remaining_files.remove(&file);
         let test_case_name = file.replace(['/', ' ', '.', '-'], "_");
+        let mut failed = false;
         let case = match res {
             Ok(duration) => {
                 let mut case = TestCase::new(test_case_name, TestCaseStatus::success());
@@ -344,7 +357,12 @@ async fn run_parallel(
                 case
             }
             Err(e) => {
-                writeln!(buf, "{}\n\n{:?}", style("[FAILED]").red().bold(), e)?;
+                failed = true;
+                let err = format!("{:?}", e);
+                if err.contains("Connection refused") {
+                    connection_refused = true;
+                }
+                writeln!(buf, "{}\n\n{}", style("[FAILED]").red().bold(), err)?;
                 writeln!(buf)?;
                 failed_case.push(file.clone());
                 failed_db.insert(db_name.clone());
@@ -361,6 +379,24 @@ async fn run_parallel(
         };
         test_suite.add_test_case(case);
         tokio::task::block_in_place(|| stdout().write_all(&buf))?;
+        if connection_refused {
+            eprintln!("Connection refused. The server may be down. Exiting...");
+            break;
+        }
+        if fail_fast && failed {
+            println!("early exit after failure...");
+            break;
+        }
+    }
+
+    for file in remaining_files {
+        println!("{file} is not finished, skipping");
+        let test_case_name = file.replace(['/', ' ', '.', '-'], "_");
+        let mut case = TestCase::new(test_case_name, TestCaseStatus::skipped());
+        case.set_time(Duration::from_millis(0));
+        case.set_timestamp(Local::now());
+        case.set_classname(junit.as_deref().unwrap_or_default());
+        test_suite.add_test_case(case);
     }
 
     eprintln!(
@@ -368,24 +404,40 @@ async fn run_parallel(
         start.elapsed().as_millis()
     );
 
-    for db_name in db_names {
-        if keep_db_on_failure && failed_db.contains(&db_name) {
-            eprintln!(
-                "+ {}",
-                style(format!(
-                    "DATABASE {db_name} contains failed cases, kept for debugging"
-                ))
-                .red()
-                .bold()
-            );
-            continue;
-        }
-        let query = format!("DROP DATABASE {db_name};");
-        eprintln!("+ {query}");
-        if let Err(err) = db.run(&query).await {
-            eprintln!("  ignore error: {err}");
+    // If `fail_fast`, there could be some ongoing cases (then active connections)
+    // in the stream. Abort them before dropping temporary databases.
+    drop(stream);
+
+    if connection_refused {
+        eprintln!("Skip dropping databases due to connection refused: {db_names:?}");
+    } else {
+        for db_name in db_names {
+            if keep_db_on_failure && failed_db.contains(&db_name) {
+                eprintln!(
+                    "+ {}",
+                    style(format!(
+                        "DATABASE {db_name} contains failed cases, kept for debugging"
+                    ))
+                    .red()
+                    .bold()
+                );
+                continue;
+            }
+            let query = format!("DROP DATABASE {db_name};");
+            eprintln!("+ {query}");
+            if let Err(err) = db.run(&query).await {
+                let err = err.to_string();
+                if err.contains("Connection refused") {
+                    eprintln!("  Connection refused. The server may be down. Exiting...");
+                    break;
+                }
+                eprintln!("  ignore DROP DATABASE error: {err}");
+            }
         }
     }
+
+    // Shutdown the connection for managing temporary databases.
+    db.shutdown().await;
 
     if !failed_case.is_empty() {
         Err(anyhow!("some test case failed:\n{:#?}", failed_case))
@@ -402,18 +454,23 @@ async fn run_serial(
     config: DBConfig,
     labels: &[String],
     junit: Option<String>,
+    fail_fast: bool,
 ) -> Result<()> {
     let mut failed_case = vec![];
-
-    for file in files {
+    let mut skipped_case = vec![];
+    let mut files = files.into_iter();
+    let mut connection_refused = false;
+    for file in &mut files {
         let mut runner = Runner::new(|| engines::connect(engine, &config));
         for label in labels {
             runner.add_label(label);
         }
+        runner.set_var(well_known::DATABASE.to_owned(), config.db.clone());
 
         let filename = file.to_string_lossy().to_string();
         let test_case_name = filename.replace(['/', ' ', '.', '-'], "_");
-        let case = match run_test_file(&mut std::io::stdout(), runner, &file).await {
+        let mut failed = false;
+        let case = match run_test_file(&mut std::io::stdout(), &mut runner, &file).await {
             Ok(duration) => {
                 let mut case = TestCase::new(test_case_name, TestCaseStatus::success());
                 case.set_time(duration);
@@ -422,7 +479,12 @@ async fn run_serial(
                 case
             }
             Err(e) => {
-                println!("{}\n\n{:?}", style("[FAILED]").red().bold(), e);
+                failed = true;
+                let err = format!("{:?}", e);
+                if err.contains("Connection refused") {
+                    connection_refused = true;
+                }
+                println!("{}\n\n{}", style("[FAILED]").red().bold(), err);
                 println!();
                 failed_case.push(filename.clone());
                 let mut status = TestCaseStatus::non_success(NonSuccessKind::Failure);
@@ -436,7 +498,29 @@ async fn run_serial(
                 case
             }
         };
+        runner.shutdown_async().await;
         test_suite.add_test_case(case);
+        if connection_refused {
+            eprintln!("Connection refused. The server may be down. Exiting...");
+            break;
+        }
+        if fail_fast && failed {
+            println!("early exit after failure...");
+            break;
+        }
+    }
+    for file in files {
+        let filename = file.to_string_lossy().to_string();
+        let test_case_name = filename.replace(['/', ' ', '.', '-'], "_");
+        let mut case = TestCase::new(test_case_name, TestCaseStatus::skipped());
+        case.set_time(Duration::from_millis(0));
+        case.set_timestamp(Local::now());
+        case.set_classname(junit.as_deref().unwrap_or_default());
+        test_suite.add_test_case(case);
+        skipped_case.push(filename.clone());
+    }
+    if !skipped_case.is_empty() {
+        println!("some test case skipped:\n{:#?}", skipped_case);
     }
 
     if !failed_case.is_empty() {
@@ -454,14 +538,17 @@ async fn update_test_files(
     format: bool,
 ) -> Result<()> {
     for file in files {
-        let runner = Runner::new(|| engines::connect(engine, &config));
+        let mut runner = Runner::new(|| engines::connect(engine, &config));
+        runner.set_var(well_known::DATABASE.to_owned(), config.db.clone());
 
-        if let Err(e) = update_test_file(&mut std::io::stdout(), runner, &file, format).await {
+        if let Err(e) = update_test_file(&mut std::io::stdout(), &mut runner, &file, format).await {
             {
                 println!("{}\n\n{:?}", style("[FAILED]").red().bold(), e);
                 println!();
             }
         };
+
+        runner.shutdown_async().await;
     }
 
     Ok(())
@@ -482,16 +569,18 @@ async fn connect_and_run_test_file(
     for label in labels {
         runner.add_label(label);
     }
-    let result = run_test_file(out, runner, filename).await?;
+    runner.set_var(well_known::DATABASE.to_owned(), config.db.clone());
+    let result = run_test_file(out, &mut runner, filename).await;
+    runner.shutdown_async().await;
 
-    Ok(result)
+    result
 }
 
 /// Different from [`Runner::run_file_async`], we re-implement it here to print some progress
 /// information.
 async fn run_test_file<T: std::io::Write, M: MakeConnection>(
     out: &mut T,
-    mut runner: Runner<M::Conn, M>,
+    runner: &mut Runner<M::Conn, M>,
     filename: impl AsRef<Path>,
 ) -> Result<Duration> {
     let filename = filename.as_ref();
@@ -596,7 +685,7 @@ fn finish_test_file<T: std::io::Write>(
 /// progress information.
 async fn update_test_file<T: std::io::Write, M: MakeConnection>(
     out: &mut T,
-    mut runner: Runner<M::Conn, M>,
+    runner: &mut Runner<M::Conn, M>,
     filename: impl AsRef<Path>,
     format: bool,
 ) -> Result<()> {
@@ -724,7 +813,7 @@ async fn update_test_file<T: std::io::Write, M: MakeConnection>(
                     writeln!(outfile, "{record}")?;
                     continue;
                 }
-                update_record(outfile, &mut runner, record, format)
+                update_record(outfile, runner, record, format)
                     .await
                     .context(format!("failed to run `{}`", style(filename).bold()))?;
             }

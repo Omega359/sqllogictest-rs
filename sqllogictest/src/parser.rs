@@ -67,6 +67,15 @@ impl Location {
     }
 }
 
+/// Configuration for retry behavior
+#[derive(Debug, Clone, PartialEq)]
+pub struct RetryConfig {
+    /// Number of retry attempts
+    pub attempts: usize,
+    /// Duration to wait between retries
+    pub backoff: Duration,
+}
+
 /// Expectation for a statement.
 #[derive(Debug, Clone, PartialEq)]
 pub enum StatementExpect {
@@ -125,6 +134,8 @@ pub enum Record<T: ColumnType> {
         /// The SQL command.
         sql: String,
         expected: StatementExpect,
+        /// Optional retry configuration
+        retry: Option<RetryConfig>,
     },
     /// A query is an SQL command from which we expect to receive results. The result set might be
     /// empty.
@@ -135,6 +146,8 @@ pub enum Record<T: ColumnType> {
         /// The SQL command.
         sql: String,
         expected: QueryExpect<T>,
+        /// Optional retry configuration
+        retry: Option<RetryConfig>,
     },
     /// A system command is an external command that is to be executed by the shell. Currently it
     /// must succeed and the output is ignored.
@@ -145,6 +158,8 @@ pub enum Record<T: ColumnType> {
         /// The external command.
         command: String,
         stdout: Option<String>,
+        /// Optional retry configuration
+        retry: Option<RetryConfig>,
     },
     /// A sleep period.
     Sleep {
@@ -208,12 +223,21 @@ impl<T: ColumnType> std::fmt::Display for Record<T> {
                 connection: _,
                 sql,
                 expected,
+                retry,
             } => {
                 write!(f, "statement ")?;
                 match expected {
                     StatementExpect::Ok => write!(f, "ok")?,
                     StatementExpect::Count(cnt) => write!(f, "count {cnt}")?,
                     StatementExpect::Error(err) => err.fmt_inline(f)?,
+                }
+                if let Some(retry) = retry {
+                    write!(
+                        f,
+                        " retry {} backoff {}",
+                        retry.attempts,
+                        humantime::format_duration(retry.backoff)
+                    )?;
                 }
                 writeln!(f)?;
                 // statement always end with a blank line
@@ -230,6 +254,7 @@ impl<T: ColumnType> std::fmt::Display for Record<T> {
                 connection: _,
                 sql,
                 expected,
+                retry,
             } => {
                 write!(f, "query ")?;
                 match expected {
@@ -249,16 +274,24 @@ impl<T: ColumnType> std::fmt::Display for Record<T> {
                     }
                     QueryExpect::Error(err) => err.fmt_inline(f)?,
                 }
+                if let Some(retry) = retry {
+                    write!(
+                        f,
+                        " retry {} backoff {}",
+                        retry.attempts,
+                        humantime::format_duration(retry.backoff)
+                    )?;
+                }
                 writeln!(f)?;
                 writeln!(f, "{sql}")?;
 
                 match expected {
                     QueryExpect::Results { results, .. } => {
                         write!(f, "{}", RESULTS_DELIMITER)?;
-
                         for result in results {
                             write!(f, "\n{result}")?;
                         }
+
                         // query always ends with a blank line
                         writeln!(f)?
                     }
@@ -271,8 +304,17 @@ impl<T: ColumnType> std::fmt::Display for Record<T> {
                 conditions: _,
                 command,
                 stdout,
+                retry,
             } => {
                 writeln!(f, "system ok\n{command}")?;
+                if let Some(retry) = retry {
+                    write!(
+                        f,
+                        " retry {} backoff {}",
+                        retry.attempts,
+                        humantime::format_duration(retry.backoff)
+                    )?;
+                }
                 if let Some(stdout) = stdout {
                     writeln!(f, "----\n{}\n", stdout.trim())?;
                 }
@@ -622,6 +664,8 @@ pub enum ParseErrorKind {
     InvalidErrorMessage(String),
     #[error("duplicated error messages after error` and under `----`")]
     DuplicatedErrorMessage,
+    #[error("invalid retry config: {0:?}")]
+    InvalidRetryConfig(String),
     #[error("statement should have no result, use `query` instead")]
     StatementHasResults,
     #[error("invalid duration: {0:?}")]
@@ -730,22 +774,32 @@ fn parse_inner<T: ColumnType>(loc: &Location, script: &str) -> Result<Vec<Record
                 records.push(Record::Connection(conn));
             }
             ["statement", res @ ..] => {
-                let mut expected = match res {
-                    ["ok"] => StatementExpect::Ok,
-                    ["error", tokens @ ..] => {
-                        let error = ExpectedError::parse_inline_tokens(tokens)
-                            .map_err(|e| e.at(loc.clone()))?;
-                        StatementExpect::Error(error)
+                let (mut expected, res) = match res {
+                    ["ok", retry @ ..] => (StatementExpect::Ok, retry),
+                    ["error", res @ ..] => {
+                        if res.len() == 4 && res[0] == "retry" && res[2] == "backoff" {
+                            // `statement error retry <num> backoff <duration>`
+                            // To keep syntax simple, let's assume the error message must be multiline.
+                            (StatementExpect::Error(ExpectedError::Empty), res)
+                        } else {
+                            let error = ExpectedError::parse_inline_tokens(res)
+                                .map_err(|e| e.at(loc.clone()))?;
+                            (StatementExpect::Error(error), &[][..])
+                        }
                     }
-                    ["count", count_str] => {
+                    ["count", count_str, retry @ ..] => {
                         let count = count_str.parse::<u64>().map_err(|_| {
                             ParseErrorKind::InvalidNumber((*count_str).into()).at(loc.clone())
                         })?;
-                        StatementExpect::Count(count)
+                        (StatementExpect::Count(count), retry)
                     }
                     _ => return Err(ParseErrorKind::InvalidLine(line.into()).at(loc)),
                 };
+
+                let retry = parse_retry_config(res).map_err(|e| e.at(loc.clone()))?;
+
                 let (sql, has_results) = parse_lines(&mut lines, &loc, Some(RESULTS_DELIMITER))?;
+
                 if has_results {
                     if let StatementExpect::Error(e) = &mut expected {
                         // If no inline error message is specified, it might be a multiline error.
@@ -765,16 +819,24 @@ fn parse_inner<T: ColumnType>(loc: &Location, script: &str) -> Result<Vec<Record
                     connection: std::mem::take(&mut connection),
                     sql,
                     expected,
+                    retry,
                 });
             }
             ["query", res @ ..] => {
-                let mut expected = match res {
-                    ["error", tokens @ ..] => {
-                        let error = ExpectedError::parse_inline_tokens(tokens)
-                            .map_err(|e| e.at(loc.clone()))?;
-                        QueryExpect::Error(error)
+                let (mut expected, res) = match res {
+                    ["error", res @ ..] => {
+                        if res.len() == 4 && res[0] == "retry" && res[2] == "backoff" {
+                            // `query error retry <num> backoff <duration>`
+                            // To keep syntax simple, let's assume the error message must be multiline.
+                            (QueryExpect::Error(ExpectedError::Empty), res)
+                        } else {
+                            let error = ExpectedError::parse_inline_tokens(res)
+                                .map_err(|e| e.at(loc.clone()))?;
+                            (QueryExpect::Error(error), &[][..])
+                        }
                     }
                     [type_str, res @ ..] => {
+                        // query <type-string> [<sort-mode>] [<label>] [retry <attempts> backoff <backoff>]
                         let types = type_str
                             .chars()
                             .map(|ch| {
@@ -782,22 +844,36 @@ fn parse_inner<T: ColumnType>(loc: &Location, script: &str) -> Result<Vec<Record
                                     .ok_or_else(|| ParseErrorKind::InvalidType(ch).at(loc.clone()))
                             })
                             .try_collect()?;
-                        let sort_mode = res
-                            .first()
-                            .map(|&s| SortMode::try_from_str(s))
-                            .transpose()
-                            .map_err(|e| e.at(loc.clone()))?;
-                        let label = res.get(1).map(|s| s.to_string());
-                        QueryExpect::Results {
-                            types,
-                            sort_mode,
-                            result_mode: None,
-                            label,
-                            results: Vec::new(),
-                        }
+                        let sort_mode = res.first().and_then(|&s| SortMode::try_from_str(s).ok()); // Could be `retry` or label
+
+                        // To support `retry`, we assume the label must *not* be "retry"
+                        let label_start = if sort_mode.is_some() { 1 } else { 0 };
+                        let res = &res[label_start..];
+                        let label = res.first().and_then(|&s| {
+                            if s != "retry" {
+                                Some(s.to_owned())
+                            } else {
+                                None // `retry` is not a valid label
+                            }
+                        });
+
+                        let retry_start = if label.is_some() { 1 } else { 0 };
+                        let res = &res[retry_start..];
+                        (
+                            QueryExpect::Results {
+                                types,
+                                sort_mode,
+                                result_mode: None,
+                                label,
+                                results: Vec::new(),
+                            },
+                            res,
+                        )
                     }
-                    [] => QueryExpect::empty_results(),
+                    [] => (QueryExpect::empty_results(), &[][..]),
                 };
+
+                let retry = parse_retry_config(res).map_err(|e| e.at(loc.clone()))?;
 
                 // The SQL for the query is found on second and subsequent lines of the record
                 // up to first line of the form "----" or until the end of the record.
@@ -830,9 +906,12 @@ fn parse_inner<T: ColumnType>(loc: &Location, script: &str) -> Result<Vec<Record
                     connection: std::mem::take(&mut connection),
                     sql,
                     expected,
+                    retry,
                 });
             }
-            ["system", "ok"] => {
+            ["system", "ok", res @ ..] => {
+                let retry = parse_retry_config(res).map_err(|e| e.at(loc.clone()))?;
+
                 // TODO: we don't support asserting error message for system command
                 // The command is found on second and subsequent lines of the record
                 // up to first line of the form "----" or until the end of the record.
@@ -847,6 +926,7 @@ fn parse_inner<T: ColumnType>(loc: &Location, script: &str) -> Result<Vec<Record
                     conditions: std::mem::take(&mut conditions),
                     command,
                     stdout,
+                    retry,
                 });
             }
             ["control", res @ ..] => match res {
@@ -982,6 +1062,77 @@ fn parse_multiline_error<'a>(
     ExpectedError::Multiline(parse_multiple_result(lines))
 }
 
+/// Parse retry configuration from tokens
+///
+/// The retry configuration is optional and can be specified as:
+///
+/// ```text
+/// ... retry 3 backoff 1s
+/// ```
+fn parse_retry_config(tokens: &[&str]) -> Result<Option<RetryConfig>, ParseErrorKind> {
+    if tokens.is_empty() {
+        return Ok(None);
+    }
+
+    let mut iter = tokens.iter().peekable();
+
+    // Check if we have retry clause
+    match iter.next() {
+        Some(&"retry") => {}
+        Some(token) => return Err(ParseErrorKind::UnexpectedToken(token.to_string())),
+        None => return Ok(None),
+    }
+
+    // Parse number of attempts
+    let attempts = match iter.next() {
+        Some(attempts_str) => attempts_str
+            .parse::<usize>()
+            .map_err(|_| ParseErrorKind::InvalidNumber(attempts_str.to_string()))?,
+        None => {
+            return Err(ParseErrorKind::InvalidRetryConfig(
+                "expected a positive number of attempts".to_string(),
+            ))
+        }
+    };
+
+    if attempts == 0 {
+        return Err(ParseErrorKind::InvalidRetryConfig(
+            "attempt must be greater than 0".to_string(),
+        ));
+    }
+
+    // Expect "backoff" keyword
+    match iter.next() {
+        Some(&"backoff") => {}
+        Some(token) => return Err(ParseErrorKind::UnexpectedToken(token.to_string())),
+        None => {
+            return Err(ParseErrorKind::InvalidRetryConfig(
+                "expected keyword backoff".to_string(),
+            ))
+        }
+    }
+
+    // Parse backoff duration
+    let duration_str = match iter.next() {
+        Some(s) => s,
+        None => {
+            return Err(ParseErrorKind::InvalidRetryConfig(
+                "expected backoff duration".to_string(),
+            ))
+        }
+    };
+
+    let backoff = humantime::parse_duration(duration_str)
+        .map_err(|_| ParseErrorKind::InvalidDuration(duration_str.to_string()))?;
+
+    // No more tokens should be present
+    if iter.next().is_some() {
+        return Err(ParseErrorKind::UnexpectedToken("extra tokens".to_string()));
+    }
+
+    Ok(Some(RetryConfig { attempts, backoff }))
+}
+
 #[cfg(test)]
 mod tests {
     use std::io::Write;
@@ -1092,6 +1243,7 @@ select * from foo;
                 connection: Connection::Default,
                 sql: "select * from foo;".to_string(),
                 expected: QueryExpect::empty_results(),
+                retry: None,
             }]
         );
     }
@@ -1185,5 +1337,15 @@ select * from foo;
                 Self::Boolean => 'B',
             }
         }
+    }
+
+    #[test]
+    fn test_statement_retry() {
+        parse_roundtrip::<DefaultColumnType>("../tests/no_run/statement_retry.slt")
+    }
+
+    #[test]
+    fn test_query_retry() {
+        parse_roundtrip::<DefaultColumnType>("../tests/no_run/query_retry.slt")
     }
 }
