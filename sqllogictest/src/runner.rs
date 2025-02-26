@@ -2040,6 +2040,7 @@ pub fn update_record_with_output<T: ColumnType, D: ColumnType>(
                                     label: None,
                                 },
                             },
+                            retry,
                         },
                         comments: if comments.is_empty() {
                             None
